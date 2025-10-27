@@ -40,6 +40,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     db.init_app(app)
 
+    # Import models so they are registered with SQLAlchemy metadata.
+    from . import models  # noqa: F401
+
     app.register_blueprint(api_bp)
 
     return app

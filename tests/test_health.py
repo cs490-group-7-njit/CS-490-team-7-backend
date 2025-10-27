@@ -1,16 +1,8 @@
 """Smoke tests for the health endpoint."""
 from __future__ import annotations
 
-from app import create_app
 
-
-def test_health_endpoint() -> None:
-    app = create_app({
-        "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-    })
-    client = app.test_client()
-
+def test_health_endpoint(client) -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
