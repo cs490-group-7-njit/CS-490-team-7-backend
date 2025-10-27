@@ -126,6 +126,7 @@ class Staff(db.Model):
     salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=True)
     title = db.Column(db.String(100), nullable=False)
+    schedule = db.Column(db.JSON, nullable=True, default=dict)
     created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     updated_at = db.Column(
         db.DateTime,
@@ -143,6 +144,7 @@ class Staff(db.Model):
             "salon_id": self.salon_id,
             "user_id": self.user_id,
             "title": self.title,
+            "schedule": self.schedule or {},
             "user": self.user.to_dict_basic() if self.user else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

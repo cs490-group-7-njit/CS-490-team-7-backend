@@ -442,4 +442,32 @@ def delete_staff(salon_id: int, staff_id: int) -> tuple[dict[str, str], int]:
         current_app.logger.exception("Failed to delete staff member", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
+
+@bp.put("/salons/<int:salon_id>/staff/<int:staff_id>/schedule")
+def update_staff_schedule(salon_id: int, staff_id: int) -> tuple[dict[str, object], int]:
+    """Update a staff member's schedule."""
+    payload = request.get_json(silent=True) or {}
+    schedule = payload.get("schedule")
+
+    if schedule is None:
+        return (
+            jsonify({"error": "invalid_payload", "message": "schedule is required"}),
+            400,
+        )
+
+    try:
+        staff = Staff.query.filter_by(staff_id=staff_id, salon_id=salon_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        staff.schedule = schedule
+        db.session.commit()
+
+        return jsonify({"staff": staff.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update staff schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
 # --- END: Vendor Use Case 1.6 - Staff Management ---
