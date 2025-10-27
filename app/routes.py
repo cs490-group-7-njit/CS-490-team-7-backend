@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User
+from .models import AuthAccount, Salon, User, Staff
 
 bp = Blueprint("api", __name__)
 
@@ -338,3 +338,108 @@ def login() -> tuple[dict[str, object], int]:
     token = _build_token({"user_id": user.user_id, "role": user.role})
 
     return jsonify({"token": token, "user": user.to_dict_basic()}), 200
+
+
+# --- BEGIN: Vendor Use Case 1.6 - Staff Management ---
+
+@bp.get("/salons/<int:salon_id>/staff")
+def list_staff(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Get all staff members for a specific salon."""
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+        staff_members = Staff.query.filter_by(salon_id=salon_id).all()
+        payload = {"staff": [member.to_dict() for member in staff_members]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch staff members", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/salons/<int:salon_id>/staff")
+def create_staff(salon_id: int) -> tuple[dict[str, object], int]:
+    """Create a new staff member for a salon."""
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+
+    if not title:
+        return (
+            jsonify({"error": "invalid_payload", "message": "title is required"}),
+            400,
+        )
+
+    # Verify salon exists
+    salon = Salon.query.get(salon_id)
+    if not salon:
+        return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+    try:
+        new_staff = Staff(
+            salon_id=salon_id,
+            user_id=payload.get("user_id"),
+            title=title,
+        )
+        db.session.add(new_staff)
+        db.session.commit()
+
+        return jsonify({"staff": new_staff.to_dict()}), 201
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create staff member", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/staff/<int:staff_id>")
+def update_staff(salon_id: int, staff_id: int) -> tuple[dict[str, object], int]:
+    """Update a staff member."""
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+
+    if not title:
+        return (
+            jsonify({"error": "invalid_payload", "message": "title is required"}),
+            400,
+        )
+
+    try:
+        staff = Staff.query.filter_by(staff_id=staff_id, salon_id=salon_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        staff.title = title
+        if "user_id" in payload:
+            staff.user_id = payload.get("user_id")
+
+        db.session.commit()
+
+        return jsonify({"staff": staff.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update staff member", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/staff/<int:staff_id>")
+def delete_staff(salon_id: int, staff_id: int) -> tuple[dict[str, str], int]:
+    """Delete a staff member."""
+    try:
+        staff = Staff.query.filter_by(staff_id=staff_id, salon_id=salon_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        db.session.delete(staff)
+        db.session.commit()
+
+        return jsonify({"message": "Staff member deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete staff member", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# --- END: Vendor Use Case 1.6 - Staff Management ---

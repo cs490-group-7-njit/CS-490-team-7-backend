@@ -117,3 +117,33 @@ class AuthAccount(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
     user = db.relationship("User", back_populates="auth_account")
+
+
+class Staff(db.Model):
+    __tablename__ = "staff"
+
+    staff_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"))
+    title = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    user = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.staff_id,
+            "salon_id": self.salon_id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "user": self.user.to_dict_basic() if self.user else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
