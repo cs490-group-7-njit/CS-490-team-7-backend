@@ -471,3 +471,235 @@ def update_staff_schedule(salon_id: int, staff_id: int) -> tuple[dict[str, objec
         return jsonify({"error": "database_error"}), 500
 
 # --- END: Vendor Use Case 1.6 - Staff Management ---
+
+
+# --- BEGIN: Vendor Use Case 1.7 - Set Staff Schedules ---
+
+@bp.get("/staff/<int:staff_id>/schedules")
+def get_staff_schedules(staff_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Get all weekly schedules for a staff member."""
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        from .models import Schedule
+        schedules = Schedule.query.filter_by(staff_id=staff_id).all()
+        payload = {"schedules": [schedule.to_dict() for schedule in schedules]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch schedules", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/staff/<int:staff_id>/schedules")
+def create_staff_schedule(staff_id: int) -> tuple[dict[str, object], int]:
+    """Create a new weekly schedule entry for a staff member."""
+    payload = request.get_json(silent=True) or {}
+    day_of_week = payload.get("day_of_week")
+    start_time = payload.get("start_time")
+    end_time = payload.get("end_time")
+
+    if day_of_week is None or not start_time or not end_time:
+        return (
+            jsonify({
+                "error": "invalid_payload",
+                "message": "day_of_week, start_time, and end_time are required"
+            }),
+            400,
+        )
+
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        from datetime import datetime
+        from .models import Schedule
+
+        # Parse time strings (format: "HH:MM")
+        start_dt = datetime.strptime(start_time, "%H:%M")
+        end_dt = datetime.strptime(end_time, "%H:%M")
+
+        new_schedule = Schedule(
+            staff_id=staff_id,
+            day_of_week=day_of_week,
+            start_time=start_dt.time(),
+            end_time=end_dt.time(),
+        )
+        db.session.add(new_schedule)
+        db.session.commit()
+
+        return jsonify({"schedule": new_schedule.to_dict()}), 201
+
+    except ValueError:
+        return (
+            jsonify({
+                "error": "invalid_format",
+                "message": "Time format must be HH:MM"
+            }),
+            400,
+        )
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/staff/<int:staff_id>/schedules/<int:schedule_id>")
+def update_weekly_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, object], int]:
+    """Update a weekly schedule entry for a staff member."""
+    payload = request.get_json(silent=True) or {}
+    day_of_week = payload.get("day_of_week")
+    start_time = payload.get("start_time")
+    end_time = payload.get("end_time")
+
+    try:
+        from datetime import datetime
+        from .models import Schedule
+
+        schedule = Schedule.query.filter_by(schedule_id=schedule_id, staff_id=staff_id).first()
+        if not schedule:
+            return jsonify({"error": "not_found", "message": "Schedule not found"}), 404
+
+        if day_of_week is not None:
+            schedule.day_of_week = day_of_week
+        if start_time:
+            start_dt = datetime.strptime(start_time, "%H:%M")
+            schedule.start_time = start_dt.time()
+        if end_time:
+            end_dt = datetime.strptime(end_time, "%H:%M")
+            schedule.end_time = end_dt.time()
+
+        db.session.commit()
+        return jsonify({"schedule": schedule.to_dict()}), 200
+
+    except ValueError:
+        return (
+            jsonify({
+                "error": "invalid_format",
+                "message": "Time format must be HH:MM"
+            }),
+            400,
+        )
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/staff/<int:staff_id>/schedules/<int:schedule_id>")
+def delete_staff_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, str], int]:
+    """Delete a weekly schedule entry for a staff member."""
+    try:
+        from .models import Schedule
+
+        schedule = Schedule.query.filter_by(schedule_id=schedule_id, staff_id=staff_id).first()
+        if not schedule:
+            return jsonify({"error": "not_found", "message": "Schedule not found"}), 404
+
+        db.session.delete(schedule)
+        db.session.commit()
+
+        return jsonify({"message": "Schedule deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/time-blocks")
+def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Get all time blocks (breaks, holidays) for a staff member."""
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        from .models import TimeBlock
+        time_blocks = TimeBlock.query.filter_by(staff_id=staff_id).all()
+        payload = {"time_blocks": [block.to_dict() for block in time_blocks]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch time blocks", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/staff/<int:staff_id>/time-blocks")
+def create_staff_time_block(staff_id: int) -> tuple[dict[str, object], int]:
+    """Create a new time block for a staff member."""
+    payload = request.get_json(silent=True) or {}
+    starts_at = payload.get("starts_at")
+    ends_at = payload.get("ends_at")
+    reason = payload.get("reason")
+
+    if not starts_at or not ends_at:
+        return (
+            jsonify({
+                "error": "invalid_payload",
+                "message": "starts_at and ends_at are required"
+            }),
+            400,
+        )
+
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
+
+        from datetime import datetime
+        from .models import TimeBlock
+
+        # Parse ISO datetime strings
+        start_dt = datetime.fromisoformat(starts_at)
+        end_dt = datetime.fromisoformat(ends_at)
+
+        new_block = TimeBlock(
+            staff_id=staff_id,
+            starts_at=start_dt,
+            ends_at=end_dt,
+            reason=reason or None,
+        )
+        db.session.add(new_block)
+        db.session.commit()
+
+        return jsonify({"time_block": new_block.to_dict()}), 201
+
+    except ValueError:
+        return (
+            jsonify({
+                "error": "invalid_format",
+                "message": "DateTime format must be ISO format (YYYY-MM-DDTHH:MM:SS)"
+            }),
+            400,
+        )
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create time block", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/staff/<int:staff_id>/time-blocks/<int:block_id>")
+def delete_staff_time_block(staff_id: int, block_id: int) -> tuple[dict[str, str], int]:
+    """Delete a time block for a staff member."""
+    try:
+        from .models import TimeBlock
+
+        block = TimeBlock.query.filter_by(block_id=block_id, staff_id=staff_id).first()
+        if not block:
+            return jsonify({"error": "not_found", "message": "Time block not found"}), 404
+
+        db.session.delete(block)
+        db.session.commit()
+
+        return jsonify({"message": "Time block deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete time block", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# --- END: Vendor Use Case 1.7 - Set Staff Schedules ---
