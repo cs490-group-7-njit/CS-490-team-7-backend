@@ -1,14 +1,14 @@
 """Database models for the SalonHub backend."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from .extensions import db
 
 
 def utc_now() -> datetime:
     """Return a timezone-aware UTC datetime."""
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 class User(db.Model):
