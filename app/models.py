@@ -1,9 +1,14 @@
 """Database models for the SalonHub backend."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from .extensions import db
+
+
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    return datetime.now(UTC)
 
 
 class User(db.Model):
@@ -25,15 +30,16 @@ class User(db.Model):
         server_default="client",
     )
     phone = db.Column(db.String(30))
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     updated_at = db.Column(
         db.DateTime,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
     )
 
     salons = db.relationship("Salon", back_populates="vendor", lazy="dynamic")
+    auth_account = db.relationship("AuthAccount", back_populates="user", uselist=False)
 
     def to_dict_basic(self) -> dict[str, object]:
         return {
@@ -70,12 +76,12 @@ class Salon(db.Model):
         nullable=False,
         server_default="pending",
     )
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     updated_at = db.Column(
         db.DateTime,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
     )
 
     vendor = db.relationship("User", back_populates="salons")
@@ -96,3 +102,15 @@ class Salon(db.Model):
             "verification_status": self.verification_status,
             "vendor": self.vendor.to_dict_basic() if self.vendor else None,
         }
+
+
+class AuthAccount(db.Model):
+    __tablename__ = "auth_accounts"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), primary_key=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    last_login_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    user = db.relationship("User", back_populates="auth_account")
