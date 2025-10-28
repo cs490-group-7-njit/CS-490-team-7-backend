@@ -75,7 +75,7 @@ def _build_token(payload: dict[str, object]) -> str:
 
 @bp.post("/auth/login")
 def login() -> tuple[dict[str, object], int]:
-    """Authenticate a vendor by email/password and return an access token."""
+    """Authenticate a user by email/password and return an access token."""
     payload = request.get_json(silent=True) or {}
 
     email = (payload.get("email") or "").strip().lower()
@@ -99,8 +99,10 @@ def login() -> tuple[dict[str, object], int]:
 
     user, auth_account = record
 
-    if user.role != "vendor":
-        return jsonify({"error": "forbidden", "message": "account is not a vendor"}), 403
+    # Allow login for all valid user roles (client, vendor, admin)
+    valid_roles = ["client", "vendor", "admin"]
+    if user.role not in valid_roles:
+        return jsonify({"error": "forbidden", "message": f"invalid user role: {user.role}"}), 403
 
     if not check_password_hash(auth_account.password_hash, password):
         return jsonify({"error": "unauthorized", "message": "invalid email or password"}), 401
