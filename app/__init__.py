@@ -42,4 +42,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     app.register_blueprint(api_bp)
 
+    @app.get("/__health")
+    def __health():
+        return {"ok": True}
+
+
     return app
