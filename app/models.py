@@ -149,3 +149,67 @@ class Staff(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class Schedule(db.Model):
+    """Weekly schedule for a staff member (UC 1.7)."""
+
+    __tablename__ = "schedules"
+
+    schedule_id = db.Column(db.Integer, primary_key=True)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    day_of_week = db.Column(db.Integer, nullable=False)  # 0=Sunday, 1=Monday, etc.
+    start_time = db.Column(db.Time, nullable=False)
+    end_time = db.Column(db.Time, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    staff = db.relationship("Staff")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.schedule_id,
+            "staff_id": self.staff_id,
+            "day_of_week": self.day_of_week,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class TimeBlock(db.Model):
+    """Time block (e.g., break, holiday) for a staff member (UC 1.7, UC 1.14)."""
+
+    __tablename__ = "time_blocks"
+
+    block_id = db.Column(db.Integer, primary_key=True)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    starts_at = db.Column(db.DateTime, nullable=False)
+    ends_at = db.Column(db.DateTime, nullable=False)
+    reason = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    staff = db.relationship("Staff")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.block_id,
+            "staff_id": self.staff_id,
+            "starts_at": self.starts_at.isoformat() if self.starts_at else None,
+            "ends_at": self.ends_at.isoformat() if self.ends_at else None,
+            "reason": self.reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
