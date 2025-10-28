@@ -1,7 +1,7 @@
 """HTTP routes for the CS-490 Team 7 backend."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
@@ -105,7 +105,7 @@ def login() -> tuple[dict[str, object], int]:
     if not check_password_hash(auth_account.password_hash, password):
         return jsonify({"error": "unauthorized", "message": "invalid email or password"}), 401
 
-    auth_account.last_login_at = datetime.now(UTC)
+    auth_account.last_login_at = datetime.now(timezone.utc)
 
     try:
         db.session.add(auth_account)
