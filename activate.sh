@@ -1,8 +1,8 @@
 #!/bin/bash
 # Activate virtual environment and run commands
 
-cd /home/shark/GP/CS-490-team-7-backend
-source venv/bin/activate
+cd /home/ubuntu/GP/backend
+source .venv/bin/activate
 
 # Run the command passed as argument, or start interactive shell
 if [ $# -eq 0 ]; then

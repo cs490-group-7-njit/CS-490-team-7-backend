@@ -213,3 +213,38 @@ class TimeBlock(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class Service(db.Model):
+    """Services offered by a salon (UC 2.2)."""
+
+    __tablename__ = "services"
+
+    service_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    price_cents = db.Column(db.Integer, nullable=False)
+    duration_minutes = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.service_id,
+            "salon_id": self.salon_id,
+            "name": self.name,
+            "description": self.description,
+            "price_cents": self.price_cents,
+            "price_dollars": self.price_cents / 100.0,
+            "duration_minutes": self.duration_minutes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
