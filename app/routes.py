@@ -703,3 +703,165 @@ def delete_staff_time_block(staff_id: int, block_id: int) -> tuple[dict[str, str
         return jsonify({"error": "database_error"}), 500
 
 # --- END: Vendor Use Case 1.7 - Set Staff Schedules ---
+
+# --- START: Client Use Case 2.2 - Browse Available Services ---
+
+
+@bp.get("/salons/<int:salon_id>/services")
+def list_services(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Get all services for a salon."""
+    try:
+        from .models import Service
+
+        # Verify salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+        services = Service.query.filter_by(salon_id=salon_id).order_by(Service.created_at.desc()).all()
+        payload = {"services": [service.to_dict() for service in services]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch services", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/salons/<int:salon_id>/services")
+def create_service(salon_id: int) -> tuple[dict[str, object], int]:
+    """Create a new service for a salon (vendor only)."""
+    try:
+        from .models import Service
+
+        payload = request.get_json(silent=True) or {}
+
+        # Verify salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+        # Extract fields
+        name = (payload.get("name") or "").strip()
+        description = (payload.get("description") or "").strip() or None
+        price_cents = payload.get("price_cents")
+        duration_minutes = payload.get("duration_minutes")
+
+        # Validate required fields
+        if not name or price_cents is None or duration_minutes is None:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "name, price_cents, and duration_minutes are required"
+                }),
+                400,
+            )
+
+        # Validate numeric fields
+        try:
+            price_cents = int(price_cents)
+            duration_minutes = int(duration_minutes)
+            if price_cents < 0 or duration_minutes <= 0:
+                raise ValueError("Invalid values")
+        except (ValueError, TypeError):
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "price_cents must be >= 0 and duration_minutes must be > 0"
+                }),
+                400,
+            )
+
+        # Create service
+        new_service = Service(
+            salon_id=salon_id,
+            name=name,
+            description=description,
+            price_cents=price_cents,
+            duration_minutes=duration_minutes,
+        )
+        db.session.add(new_service)
+        db.session.commit()
+
+        return jsonify({"message": "Service created successfully", "service": new_service.to_dict()}), 201
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create service", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/services/<int:service_id>")
+def update_service(salon_id: int, service_id: int) -> tuple[dict[str, object], int]:
+    """Update a service for a salon (vendor only)."""
+    try:
+        from .models import Service
+
+        payload = request.get_json(silent=True) or {}
+
+        # Verify service exists and belongs to salon
+        service = Service.query.filter_by(service_id=service_id, salon_id=salon_id).first()
+        if not service:
+            return jsonify({"error": "not_found", "message": "Service not found"}), 404
+
+        # Update fields
+        if "name" in payload:
+            service.name = (payload.get("name") or "").strip()
+        if "description" in payload:
+            service.description = (payload.get("description") or "").strip() or None
+        if "price_cents" in payload:
+            try:
+                service.price_cents = int(payload.get("price_cents"))
+                if service.price_cents < 0:
+                    raise ValueError("price_cents must be >= 0")
+            except (ValueError, TypeError):
+                return (
+                    jsonify({
+                        "error": "invalid_payload",
+                        "message": "price_cents must be a non-negative integer"
+                    }),
+                    400,
+                )
+        if "duration_minutes" in payload:
+            try:
+                service.duration_minutes = int(payload.get("duration_minutes"))
+                if service.duration_minutes <= 0:
+                    raise ValueError("duration_minutes must be > 0")
+            except (ValueError, TypeError):
+                return (
+                    jsonify({
+                        "error": "invalid_payload",
+                        "message": "duration_minutes must be a positive integer"
+                    }),
+                    400,
+                )
+
+        db.session.commit()
+        return jsonify({"message": "Service updated successfully", "service": service.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update service", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/services/<int:service_id>")
+def delete_service(salon_id: int, service_id: int) -> tuple[dict[str, str], int]:
+    """Delete a service from a salon (vendor only)."""
+    try:
+        from .models import Service
+
+        service = Service.query.filter_by(service_id=service_id, salon_id=salon_id).first()
+        if not service:
+            return jsonify({"error": "not_found", "message": "Service not found"}), 404
+
+        db.session.delete(service)
+        db.session.commit()
+
+        return jsonify({"message": "Service deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete service", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# --- END: Client Use Case 2.2 - Browse Available Services ---
