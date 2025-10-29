@@ -1030,9 +1030,9 @@ def update_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
-@bp.delete("/appointments/<int:appointment_id>")
-def delete_appointment(appointment_id: int) -> tuple[dict[str, str], int]:
-    """Delete/cancel an appointment."""
+@bp.get("/appointments/<int:appointment_id>")
+def get_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], int]:
+    """Get appointment details with related information."""
     try:
         from .models import Appointment
 
@@ -1040,14 +1040,218 @@ def delete_appointment(appointment_id: int) -> tuple[dict[str, str], int]:
         if not appointment:
             return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
 
-        db.session.delete(appointment)
+        # Build detailed response with related objects
+        appointment_data = appointment.to_dict()
+
+        # Add related object details
+        if appointment.salon_id:
+            salon = appointment.salon
+            appointment_data["salon"] = {
+                "id": salon.salon_id,
+                "name": salon.name,
+                "address": salon.address_line1,
+                "city": salon.city,
+                "state": salon.state,
+                "phone": salon.phone,
+            }
+
+        if appointment.staff_id:
+            staff = appointment.staff
+            appointment_data["staff"] = {
+                "id": staff.staff_id,
+                "title": staff.title,
+                "user": {"id": staff.user.user_id, "name": staff.user.name} if staff.user else None,
+            }
+
+        if appointment.service_id:
+            service = appointment.service
+            appointment_data["service"] = {
+                "id": service.service_id,
+                "name": service.name,
+                "description": service.description,
+                "price_cents": service.price_cents,
+                "price_dollars": service.price_cents / 100.0,
+                "duration_minutes": service.duration_minutes,
+            }
+
+        if appointment.client_id:
+            client = appointment.client
+            appointment_data["client"] = {
+                "id": client.user_id,
+                "name": client.name,
+                "email": client.email,
+            }
+
+        return jsonify({"appointment": appointment_data}), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/appointments/<int:appointment_id>/reschedule")
+def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], int]:
+    """Reschedule an appointment to a new date/time with conflict checking."""
+    try:
+        from datetime import datetime as dt, timedelta
+        from .models import Appointment, Staff, TimeBlock
+
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        # Don't allow rescheduling completed or cancelled appointments
+        if appointment.status in ["completed", "cancelled", "no-show"]:
+            return (
+                jsonify(
+                    {
+                        "error": "cannot_reschedule",
+                        "message": f"Cannot reschedule an appointment with status '{appointment.status}'",
+                    }
+                ),
+                400,
+            )
+
+        data = request.get_json()
+
+        # Require new start time
+        if "starts_at" not in data:
+            return (
+                jsonify({"error": "invalid_input", "message": "starts_at is required"}),
+                400,
+            )
+
+        try:
+            new_start = dt.fromisoformat(data["starts_at"].replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return (
+                jsonify({"error": "invalid_datetime", "message": "Invalid datetime format"}),
+                400,
+            )
+
+        # Check for conflicts with new time
+        staff = appointment.staff
+        service = appointment.service
+        new_end = new_start + timedelta(minutes=service.duration_minutes)
+
+        # Check existing appointments
+        conflicting = (
+            Appointment.query.filter(
+                Appointment.staff_id == appointment.staff_id,
+                Appointment.appointment_id != appointment_id,  # Exclude current appointment
+                Appointment.status == "booked",
+                Appointment.starts_at < new_end,
+                Appointment.ends_at > new_start,
+            )
+            .first()
+        )
+
+        if conflicting:
+            return (
+                jsonify(
+                    {
+                        "error": "conflict",
+                        "message": "Time slot conflicts with another appointment",
+                    }
+                ),
+                409,
+            )
+
+        # Check time blocks (breaks/holidays)
+        timeblock_conflict = TimeBlock.query.filter(
+            TimeBlock.staff_id == appointment.staff_id,
+            TimeBlock.starts_at < new_end,
+            TimeBlock.ends_at > new_start,
+        ).first()
+
+        if timeblock_conflict:
+            return (
+                jsonify(
+                    {
+                        "error": "blocked_time",
+                        "message": f"Staff member is blocked during this time: {timeblock_conflict.reason}",
+                    }
+                ),
+                409,
+            )
+
+        # Check schedule for staff availability
+        from datetime import time as time_type
+
+        day_of_week = new_start.weekday() + 1  # SQLAlchemy uses 1=Monday
+        start_time = new_start.time()
+        end_time = new_end.time()
+
+        schedule = Schedule.query.filter(
+            Schedule.staff_id == appointment.staff_id,
+            Schedule.day_of_week == day_of_week,
+        ).first()
+
+        if not schedule:
+            return (
+                jsonify(
+                    {
+                        "error": "not_available",
+                        "message": "Staff member is not scheduled for this day",
+                    }
+                ),
+                400,
+            )
+
+        if not (schedule.start_time <= start_time and end_time <= schedule.end_time):
+            return (
+                jsonify(
+                    {
+                        "error": "outside_hours",
+                        "message": "Appointment falls outside staff working hours",
+                    }
+                ),
+                400,
+            )
+
+        # Update appointment
+        appointment.starts_at = new_start
+        appointment.ends_at = new_end
         db.session.commit()
 
-        return jsonify({"message": "Appointment deleted successfully"}), 200
+        return jsonify({"appointment": appointment.to_dict()}), 200
 
     except SQLAlchemyError as exc:
         db.session.rollback()
-        current_app.logger.exception("Failed to delete appointment", exc_info=exc)
+        current_app.logger.exception("Failed to reschedule appointment", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/appointments/<int:appointment_id>")
+def delete_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Cancel an appointment by setting status to 'cancelled'."""
+    try:
+        from .models import Appointment
+
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        # Don't allow cancelling already completed or no-show appointments
+        if appointment.status in ["completed", "no-show"]:
+            return (
+                jsonify(
+                    {
+                        "error": "cannot_cancel",
+                        "message": f"Cannot cancel an appointment with status '{appointment.status}'",
+                    }
+                ),
+                400,
+            )
+
+        appointment.status = "cancelled"
+        db.session.commit()
+
+        return jsonify({"message": "Appointment cancelled successfully", "appointment": appointment.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to cancel appointment", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
 
