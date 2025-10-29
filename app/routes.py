@@ -1353,4 +1353,117 @@ def check_staff_availability(staff_id: int) -> tuple[dict[str, object], int]:
         current_app.logger.exception("Failed to check availability", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
+
+@bp.get("/salons/<int:salon_id>/appointments")
+def list_salon_appointments(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all appointments for a specific salon (vendor view)."""
+    try:
+        from .models import Appointment, Salon
+
+        # Verify salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+        # Get query parameters for filtering
+        status = request.args.get("status")  # 'booked', 'completed', 'cancelled', 'no-show'
+        date_str = request.args.get("date")  # YYYY-MM-DD
+
+        query = Appointment.query.filter_by(salon_id=salon_id)
+
+        # Filter by status if provided
+        if status:
+            valid_statuses = ["booked", "completed", "cancelled", "no-show"]
+            if status in valid_statuses:
+                query = query.filter_by(status=status)
+
+        # Filter by date if provided
+        if date_str:
+            try:
+                from datetime import datetime as dt, date as date_type
+
+                date_obj = dt.strptime(date_str, "%Y-%m-%d").date()
+                next_day = date_type.today() if date_obj == date_type.today() else date_obj
+                from datetime import timedelta
+
+                day_start = dt.combine(date_obj, dt.min.time())
+                day_end = dt.combine(date_obj, dt.max.time())
+
+                query = query.filter(Appointment.starts_at >= day_start, Appointment.starts_at <= day_end)
+            except ValueError:
+                return jsonify({"error": "invalid_date", "message": "Date must be in YYYY-MM-DD format"}), 400
+
+        # Sort by start time (upcoming first)
+        appointments = query.order_by(Appointment.starts_at.desc()).all()
+
+        payload = {"appointments": [appt.to_dict() for appt in appointments]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon appointments", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/appointments/<int:appointment_id>/status")
+def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Update appointment status (vendor can change booked→completed, no-show, etc)."""
+    try:
+        from .models import Appointment
+
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        data = request.get_json()
+
+        if "status" not in data:
+            return jsonify({"error": "invalid_input", "message": "status is required"}), 400
+
+        new_status = data["status"]
+        valid_statuses = ["booked", "completed", "cancelled", "no-show"]
+
+        if new_status not in valid_statuses:
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_status",
+                        "message": f"Status must be one of: {', '.join(valid_statuses)}",
+                    }
+                ),
+                400,
+            )
+
+        # Prevent status transitions that don't make sense
+        if appointment.status == "cancelled" and new_status != "cancelled":
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_transition",
+                        "message": "Cannot change status of a cancelled appointment",
+                    }
+                ),
+                400,
+            )
+
+        if appointment.status == "completed" and new_status not in ["completed"]:
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_transition",
+                        "message": "Cannot change status of a completed appointment",
+                    }
+                ),
+                400,
+            )
+
+        appointment.status = new_status
+        db.session.commit()
+
+        return jsonify({"appointment": appointment.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update appointment status", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
 # --- END: Client Use Case 2.3 - Book Appointments ---
