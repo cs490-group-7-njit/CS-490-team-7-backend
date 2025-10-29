@@ -865,3 +865,288 @@ def delete_service(salon_id: int, service_id: int) -> tuple[dict[str, str], int]
         return jsonify({"error": "database_error"}), 500
 
 # --- END: Client Use Case 2.2 - Browse Available Services ---
+
+# --- START: Client Use Case 2.3 - Book Appointments ---
+
+
+@bp.get("/appointments")
+def list_appointments() -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Get all appointments for the authenticated user (client or vendor)."""
+    try:
+        from .models import Appointment
+
+        # For now, return all appointments. In production, filter by user role
+        appointments = Appointment.query.order_by(Appointment.starts_at.desc()).all()
+        payload = {"appointments": [appt.to_dict() for appt in appointments]}
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointments", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/appointments")
+def create_appointment() -> tuple[dict[str, object], int]:
+    """Create a new appointment."""
+    try:
+        from datetime import datetime as dt
+        from .models import Appointment, Staff, Service
+
+        payload = request.get_json(silent=True) or {}
+
+        # Extract fields
+        salon_id = payload.get("salon_id")
+        staff_id = payload.get("staff_id")
+        service_id = payload.get("service_id")
+        client_id = payload.get("client_id")
+        starts_at_str = payload.get("starts_at")
+        notes = (payload.get("notes") or "").strip() or None
+
+        # Validate required fields
+        if not all([salon_id, staff_id, service_id, client_id, starts_at_str]):
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "salon_id, staff_id, service_id, client_id, and starts_at are required"
+                }),
+                400,
+            )
+
+        # Parse datetime
+        try:
+            starts_at = dt.fromisoformat(starts_at_str)
+        except (ValueError, TypeError):
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "starts_at must be a valid ISO format datetime"
+                }),
+                400,
+            )
+
+        # Get service to calculate duration
+        service = Service.query.get(service_id)
+        if not service:
+            return jsonify({"error": "not_found", "message": "Service not found"}), 404
+
+        # Calculate end time
+        from datetime import timedelta
+        ends_at = starts_at + timedelta(minutes=service.duration_minutes)
+
+        # Check if staff exists
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff not found"}), 404
+
+        # Check for conflicts with existing appointments
+        conflicting = Appointment.query.filter(
+            Appointment.staff_id == staff_id,
+            Appointment.status != "cancelled",
+            Appointment.starts_at < ends_at,
+            Appointment.ends_at > starts_at,
+        ).first()
+
+        if conflicting:
+            return (
+                jsonify({
+                    "error": "conflict",
+                    "message": "Staff member has a conflicting appointment"
+                }),
+                409,
+            )
+
+        # Create appointment
+        new_appointment = Appointment(
+            salon_id=salon_id,
+            staff_id=staff_id,
+            service_id=service_id,
+            client_id=client_id,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            notes=notes,
+        )
+        db.session.add(new_appointment)
+        db.session.commit()
+
+        return jsonify({"message": "Appointment created successfully", "appointment": new_appointment.to_dict()}), 201
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create appointment", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/appointments/<int:appointment_id>")
+def update_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Update an appointment."""
+    try:
+        from datetime import datetime as dt, timedelta
+        from .models import Appointment, Service
+
+        payload = request.get_json(silent=True) or {}
+
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        # Update fields
+        if "starts_at" in payload:
+            try:
+                appointment.starts_at = dt.fromisoformat(payload["starts_at"])
+                # Recalculate end time based on service duration
+                service = Service.query.get(appointment.service_id)
+                if service:
+                    appointment.ends_at = appointment.starts_at + timedelta(minutes=service.duration_minutes)
+            except (ValueError, TypeError):
+                return (
+                    jsonify({
+                        "error": "invalid_payload",
+                        "message": "starts_at must be a valid ISO format datetime"
+                    }),
+                    400,
+                )
+
+        if "notes" in payload:
+            appointment.notes = (payload.get("notes") or "").strip() or None
+
+        if "status" in payload:
+            status = payload.get("status")
+            if status not in ["booked", "completed", "cancelled", "no-show"]:
+                return (
+                    jsonify({
+                        "error": "invalid_payload",
+                        "message": "status must be one of: booked, completed, cancelled, no-show"
+                    }),
+                    400,
+                )
+            appointment.status = status
+
+        db.session.commit()
+        return jsonify({"message": "Appointment updated successfully", "appointment": appointment.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update appointment", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/appointments/<int:appointment_id>")
+def delete_appointment(appointment_id: int) -> tuple[dict[str, str], int]:
+    """Delete/cancel an appointment."""
+    try:
+        from .models import Appointment
+
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        db.session.delete(appointment)
+        db.session.commit()
+
+        return jsonify({"message": "Appointment deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete appointment", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/availability")
+def check_staff_availability(staff_id: int) -> tuple[dict[str, object], int]:
+    """Check available time slots for a staff member on a given date."""
+    try:
+        from datetime import datetime as dt, timedelta, time
+        from .models import Staff, Schedule, TimeBlock, Appointment
+
+        # Get query parameters
+        date_str = request.args.get("date")
+        duration_minutes = request.args.get("duration_minutes", type=int)
+
+        if not date_str or not duration_minutes:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "date (YYYY-MM-DD) and duration_minutes are required"
+                }),
+                400,
+            )
+
+        # Parse date
+        try:
+            target_date = dt.fromisoformat(date_str).date()
+        except (ValueError, TypeError):
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "date must be in YYYY-MM-DD format"
+                }),
+                400,
+            )
+
+        # Verify staff exists
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "not_found", "message": "Staff not found"}), 404
+
+        # Get staff's schedule for this day of week
+        day_of_week = target_date.weekday()
+        # Convert Python weekday (0=Mon) to database format (0=Sun)
+        day_of_week = (day_of_week + 1) % 7
+
+        schedules = Schedule.query.filter_by(staff_id=staff_id, day_of_week=day_of_week).all()
+        if not schedules:
+            return jsonify({"available_slots": []}), 200
+
+        # Get time blocks (breaks, holidays) for this day
+        start_of_day = dt.combine(target_date, time.min)
+        end_of_day = dt.combine(target_date, time.max)
+
+        time_blocks = TimeBlock.query.filter(
+            TimeBlock.staff_id == staff_id,
+            TimeBlock.starts_at <= end_of_day,
+            TimeBlock.ends_at >= start_of_day,
+        ).all()
+
+        # Get existing appointments for this day
+        appointments = Appointment.query.filter(
+            Appointment.staff_id == staff_id,
+            Appointment.status != "cancelled",
+            Appointment.starts_at >= start_of_day,
+            Appointment.ends_at <= end_of_day,
+        ).all()
+
+        # Generate available slots (30-minute intervals)
+        available_slots = []
+        for schedule in schedules:
+            current_time = dt.combine(target_date, schedule.start_time)
+            end_time = dt.combine(target_date, schedule.end_time)
+
+            while current_time + timedelta(minutes=duration_minutes) <= end_time:
+                slot_end = current_time + timedelta(minutes=duration_minutes)
+
+                # Check if slot conflicts with time blocks
+                blocked = any(
+                    tb.starts_at <= current_time and tb.ends_at > current_time or
+                    tb.starts_at < slot_end and tb.ends_at >= slot_end
+                    for tb in time_blocks
+                )
+
+                # Check if slot conflicts with appointments
+                conflicting = any(
+                    a.starts_at <= current_time and a.ends_at > current_time or
+                    a.starts_at < slot_end and a.ends_at >= slot_end
+                    for a in appointments
+                )
+
+                if not blocked and not conflicting:
+                    available_slots.append(current_time.isoformat())
+
+                current_time += timedelta(minutes=30)
+
+        return jsonify({"available_slots": available_slots}), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to check availability", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# --- END: Client Use Case 2.3 - Book Appointments ---

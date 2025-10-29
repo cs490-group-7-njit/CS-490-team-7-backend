@@ -248,3 +248,58 @@ class Service(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class Appointment(db.Model):
+    """Client appointments at salons (UC 2.3)."""
+
+    __tablename__ = "appointments"
+
+    appointment_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    service_id = db.Column(db.Integer, db.ForeignKey("services.service_id"), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    starts_at = db.Column(db.DateTime, nullable=False)
+    ends_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(
+        db.Enum(
+            "booked",
+            "completed",
+            "cancelled",
+            "no-show",
+            name="appointment_status",
+            native_enum=False,
+            validate_strings=True,
+        ),
+        nullable=False,
+        server_default="booked",
+    )
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    staff = db.relationship("Staff")
+    service = db.relationship("Service")
+    client = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.appointment_id,
+            "salon_id": self.salon_id,
+            "staff_id": self.staff_id,
+            "service_id": self.service_id,
+            "client_id": self.client_id,
+            "starts_at": self.starts_at.isoformat() if self.starts_at else None,
+            "ends_at": self.ends_at.isoformat() if self.ends_at else None,
+            "status": self.status,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
