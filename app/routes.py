@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff
+from .models import AuthAccount, Salon, User, Staff, Service
 
 bp = Blueprint("api", __name__)
 
@@ -51,6 +51,46 @@ def list_salons() -> tuple[dict[str, list[dict[str, object]]], int]:
 
     payload = {"salons": [salon.to_dict() for salon in salons]}
     return jsonify(payload), 200
+
+
+@bp.get("/salons/<int:salon_id>")
+def get_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get full salon details including services and staff (UC 2.6)."""
+    try:
+        # Fetch salon with vendor details
+        salon = (
+            Salon.query.options(joinedload(Salon.vendor))
+            .filter(Salon.salon_id == salon_id)
+            .first()
+        )
+        
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Fetch all services for this salon
+        services = Service.query.filter(Service.salon_id == salon_id).all()
+        
+        # Fetch all staff members for this salon
+        staff_members = (
+            Staff.query.options(joinedload(Staff.user))
+            .filter(Staff.salon_id == salon_id)
+            .all()
+        )
+        
+        # Build response with salon details
+        salon_data = salon.to_dict()
+        salon_data["services"] = [service.to_dict() for service in services]
+        salon_data["staff"] = [member.to_dict() for member in staff_members]
+        
+        # Placeholder for ratings (reviews not yet implemented)
+        salon_data["average_rating"] = 4.5
+        salon_data["total_reviews"] = 0
+        
+        return jsonify({"salon": salon_data}), 200
+        
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon details", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
 
 
 @bp.post("/salons")
