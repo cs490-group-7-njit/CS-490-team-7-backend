@@ -35,22 +35,93 @@ def database_health() -> tuple[dict[str, str], int]:
 
 
 @bp.get("/salons")
-def list_salons() -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Return a list of published salons with associated vendor information."""
+def list_salons() -> tuple[dict[str, object], int]:
+    """Return a list of published salons with search/filter support (UC 2.7).
+    
+    Query Parameters:
+    - query: Search by salon name (partial match, case-insensitive)
+    - city: Filter by city (exact match)
+    - business_type: Filter by business type (exact match)
+    - sort: Sort field (name, created_at) - default: created_at
+    - order: Sort order (asc, desc) - default: desc
+    - page: Page number (default: 1)
+    - limit: Results per page (default: 12, max: 50)
+    """
     try:
-        salons = (
-            Salon.query.options(joinedload(Salon.vendor))
-            # .filter(Salon.is_published.is_(True))
-            .order_by(Salon.created_at.desc())
-            .limit(12)
-            .all()
-        )
+        # Get query parameters
+        query = request.args.get("query", "").strip()
+        city = request.args.get("city", "").strip()
+        business_type = request.args.get("business_type", "").strip()
+        sort_field = request.args.get("sort", "created_at").strip()
+        sort_order = request.args.get("order", "desc").strip().lower()
+        page = max(1, int(request.args.get("page", 1)))
+        limit = min(50, max(1, int(request.args.get("limit", 12))))
+        
+        # Validate sort parameters
+        if sort_field not in ["name", "created_at"]:
+            sort_field = "created_at"
+        if sort_order not in ["asc", "desc"]:
+            sort_order = "desc"
+        
+        # Build base query with vendor relationships
+        salon_query = Salon.query.options(joinedload(Salon.vendor))
+        
+        # Apply filters
+        if query:
+            salon_query = salon_query.filter(
+                Salon.name.ilike(f"%{query}%")
+            )
+        
+        if city:
+            salon_query = salon_query.filter(Salon.city.ilike(city))
+        
+        if business_type:
+            salon_query = salon_query.filter(
+                Salon.business_type.ilike(business_type)
+            )
+        
+        # Filter to only published salons (uncomment when ready)
+        # salon_query = salon_query.filter(Salon.is_published.is_(True))
+        
+        # Apply sorting
+        if sort_field == "name":
+            order_by = Salon.name.asc() if sort_order == "asc" else Salon.name.desc()
+        else:
+            order_by = Salon.created_at.asc() if sort_order == "asc" else Salon.created_at.desc()
+        
+        salon_query = salon_query.order_by(order_by)
+        
+        # Get total count for pagination
+        total_count = salon_query.count()
+        
+        # Apply pagination
+        salons = salon_query.limit(limit).offset((page - 1) * limit).all()
+        
+        # Build response with pagination metadata
+        payload = {
+            "salons": [salon.to_dict() for salon in salons],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total_count,
+                "pages": (total_count + limit - 1) // limit,
+            },
+            "filters": {
+                "query": query,
+                "city": city,
+                "business_type": business_type,
+                "sort": sort_field,
+                "order": sort_order,
+            }
+        }
+        return jsonify(payload), 200
+        
+    except (ValueError, TypeError) as exc:
+        current_app.logger.warning(f"Invalid pagination parameters: {exc}")
+        return jsonify({"error": "invalid_parameters"}), 400
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch salons", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
-
-    payload = {"salons": [salon.to_dict() for salon in salons]}
-    return jsonify(payload), 200
 
 
 @bp.get("/salons/<int:salon_id>")
