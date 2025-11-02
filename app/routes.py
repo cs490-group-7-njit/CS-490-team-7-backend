@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff, Service
+from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment
 
 bp = Blueprint("api", __name__)
 
@@ -1575,6 +1575,160 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
     except SQLAlchemyError as exc:
         db.session.rollback()
         current_app.logger.exception("Failed to update appointment status", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# Reviews Endpoints (UC 2.8)
+# ============================================================================
+
+@bp.get("/salons/<int:salon_id>/reviews")
+def get_salon_reviews(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all reviews for a salon with average rating (UC 2.8)."""
+    try:
+        # Check if salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Get all reviews for this salon
+        reviews = (
+            Review.query.filter(Review.salon_id == salon_id)
+            .order_by(Review.created_at.desc())
+            .all()
+        )
+
+        # Calculate average rating
+        if reviews:
+            avg_rating = sum(r.rating for r in reviews) / len(reviews)
+        else:
+            avg_rating = 0
+
+        payload = {
+            "reviews": [review.to_dict() for review in reviews],
+            "average_rating": round(avg_rating, 1),
+            "total_reviews": len(reviews),
+        }
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon reviews", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/salons/<int:salon_id>/reviews")
+def create_review(salon_id: int) -> tuple[dict[str, object], int]:
+    """Create a new review for a salon (UC 2.8)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        # Validate required fields
+        client_id = payload.get("client_id")
+        rating = payload.get("rating")
+        comment = (payload.get("comment") or "").strip() or None
+
+        if not client_id or rating is None:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "client_id and rating are required"
+                }),
+                400,
+            )
+
+        # Validate rating range
+        if not isinstance(rating, int) or rating < 1 or rating > 5:
+            return (
+                jsonify({
+                    "error": "invalid_rating",
+                    "message": "Rating must be an integer between 1 and 5"
+                }),
+                400,
+            )
+
+        # Check if salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Check if client exists
+        client = User.query.get(client_id)
+        if not client:
+            return jsonify({"error": "client_not_found"}), 404
+
+        # Create review
+        review = Review(
+            salon_id=salon_id,
+            client_id=client_id,
+            rating=rating,
+            comment=comment,
+        )
+
+        db.session.add(review)
+        db.session.commit()
+
+        return jsonify({"review": review.to_dict()}), 201
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create review", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/reviews/<int:review_id>")
+def update_review(review_id: int) -> tuple[dict[str, object], int]:
+    """Update an existing review (UC 2.8)."""
+    try:
+        review = Review.query.get(review_id)
+        if not review:
+            return jsonify({"error": "review_not_found"}), 404
+
+        payload = request.get_json(silent=True) or {}
+
+        # Update rating if provided
+        if "rating" in payload:
+            rating = payload.get("rating")
+            if not isinstance(rating, int) or rating < 1 or rating > 5:
+                return (
+                    jsonify({
+                        "error": "invalid_rating",
+                        "message": "Rating must be an integer between 1 and 5"
+                    }),
+                    400,
+                )
+            review.rating = rating
+
+        # Update comment if provided
+        if "comment" in payload:
+            comment = (payload.get("comment") or "").strip() or None
+            review.comment = comment
+
+        db.session.commit()
+
+        return jsonify({"review": review.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update review", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/reviews/<int:review_id>")
+def delete_review(review_id: int) -> tuple[dict[str, str], int]:
+    """Delete a review (UC 2.8)."""
+    try:
+        review = Review.query.get(review_id)
+        if not review:
+            return jsonify({"error": "review_not_found"}), 404
+
+        db.session.delete(review)
+        db.session.commit()
+
+        return jsonify({"message": "Review deleted successfully"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete review", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
 # --- END: Client Use Case 2.3 - Book Appointments ---
