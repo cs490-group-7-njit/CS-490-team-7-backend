@@ -1584,30 +1584,80 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
 
 @bp.get("/salons/<int:salon_id>/reviews")
 def get_salon_reviews(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all reviews for a salon with average rating (UC 2.8)."""
+    """Get reviews for a salon with filtering, sorting, and pagination (UC 2.9).
+    
+    Query Parameters:
+    - sort_by: 'rating' or 'date' (default: 'date')
+    - order: 'asc' or 'desc' (default: 'desc')
+    - min_rating: Filter reviews by minimum rating (1-5, optional)
+    - limit: Max reviews to return (default: 50, max: 100)
+    - offset: Pagination offset (default: 0)
+    """
     try:
         # Check if salon exists
         salon = Salon.query.get(salon_id)
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
 
-        # Get all reviews for this salon
-        reviews = (
-            Review.query.filter(Review.salon_id == salon_id)
-            .order_by(Review.created_at.desc())
-            .all()
-        )
+        # Get query parameters
+        sort_by = request.args.get('sort_by', 'date')  # 'rating' or 'date'
+        order = request.args.get('order', 'desc')  # 'asc' or 'desc'
+        min_rating = request.args.get('min_rating', type=int)
+        limit = request.args.get('limit', default=50, type=int)
+        offset = request.args.get('offset', default=0, type=int)
+        
+        # Validate and constrain parameters
+        if sort_by not in ['rating', 'date']:
+            sort_by = 'date'
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+        if min_rating and (min_rating < 1 or min_rating > 5):
+            min_rating = None
+        limit = min(max(limit, 1), 100)  # Between 1 and 100
+        offset = max(offset, 0)
 
-        # Calculate average rating
-        if reviews:
-            avg_rating = sum(r.rating for r in reviews) / len(reviews)
+        # Build query
+        query = Review.query.filter(Review.salon_id == salon_id)
+        
+        # Apply minimum rating filter
+        if min_rating:
+            query = query.filter(Review.rating >= min_rating)
+        
+        # Get total count before pagination
+        total_count = query.count()
+        
+        # Apply sorting
+        if sort_by == 'rating':
+            sort_column = Review.rating
+        else:  # date
+            sort_column = Review.created_at
+        
+        if order == 'asc':
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+        
+        # Apply pagination
+        reviews = query.limit(limit).offset(offset).all()
+
+        # Calculate average rating (from ALL reviews, not just filtered)
+        all_reviews = Review.query.filter(Review.salon_id == salon_id).all()
+        if all_reviews:
+            avg_rating = sum(r.rating for r in all_reviews) / len(all_reviews)
         else:
             avg_rating = 0
 
         payload = {
             "reviews": [review.to_dict() for review in reviews],
             "average_rating": round(avg_rating, 1),
-            "total_reviews": len(reviews),
+            "total_reviews": len(all_reviews),
+            "filtered_count": total_count,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "has_more": (offset + limit) < total_count
+            }
         }
         return jsonify(payload), 200
 
