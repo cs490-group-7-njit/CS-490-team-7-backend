@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment
+from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty
 
 bp = Blueprint("api", __name__)
 
@@ -1782,3 +1782,174 @@ def delete_review(review_id: int) -> tuple[dict[str, str], int]:
         return jsonify({"error": "database_error"}), 500
 
 # --- END: Client Use Case 2.3 - Book Appointments ---
+
+# ============================================================================
+# UC 2.10 - Check Loyalty Points
+# ============================================================================
+
+@bp.get("/users/<int:user_id>/loyalty")
+def get_user_loyalty(user_id: int) -> tuple[dict[str, object], int]:
+    """Get loyalty points summary for a user across all salons (UC 2.10)."""
+    try:
+        from .models import ClientLoyalty
+        
+        # Verify user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Get all loyalty records for this user
+        loyalty_records = ClientLoyalty.query.filter_by(client_id=user_id).all()
+        
+        # Calculate totals
+        total_points = sum(record.points_balance for record in loyalty_records)
+        total_salons = len(loyalty_records)
+        
+        # Build response with loyalty summary
+        payload = {
+            "user_id": user_id,
+            "total_points": total_points,
+            "total_salons": total_salons,
+            "loyalty_by_salon": [
+                {
+                    "salon_id": record.salon_id,
+                    "salon_name": record.salon.name if record.salon else "Unknown",
+                    "points": record.points_balance
+                }
+                for record in loyalty_records
+            ]
+        }
+        return jsonify(payload), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch loyalty points", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# ============================================================================
+# UC 2.11 - View Appointment History
+# ============================================================================
+
+@bp.get("/users/<int:user_id>/appointments/history")
+def get_appointment_history(user_id: int) -> tuple[dict[str, object], int]:
+    """Get appointment history for a user (UC 2.11)."""
+    try:
+        from .models import Appointment
+        
+        # Verify user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Get query parameters
+        status = request.args.get("status")  # Filter by status
+        limit = request.args.get("limit", default=50, type=int)
+        offset = request.args.get("offset", default=0, type=int)
+        
+        # Constrain pagination
+        limit = min(max(limit, 1), 100)
+        offset = max(offset, 0)
+        
+        # Build query for user's appointments
+        query = Appointment.query.filter_by(client_id=user_id)
+        
+        # Filter by status if provided
+        if status:
+            query = query.filter(Appointment.status == status)
+        
+        # Get total count
+        total_count = query.count()
+        
+        # Sort by start time (newest first)
+        appointments = query.order_by(Appointment.starts_at.desc()).limit(limit).offset(offset).all()
+        
+        # Build response with appointment details
+        payload = {
+            "appointments": [
+                {
+                    "id": appt.appointment_id,
+                    "salon_id": appt.salon_id,
+                    "salon_name": appt.salon.name if appt.salon else "Unknown",
+                    "service_id": appt.service_id,
+                    "service_name": appt.service.name if appt.service else "Unknown",
+                    "staff_id": appt.staff_id,
+                    "staff_name": appt.staff.user.name if appt.staff and appt.staff.user else "Unknown",
+                    "starts_at": appt.starts_at.isoformat() if appt.starts_at else None,
+                    "ends_at": appt.ends_at.isoformat() if appt.ends_at else None,
+                    "status": appt.status,
+                    "notes": appt.notes
+                }
+                for appt in appointments
+            ],
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "has_more": (offset + limit) < total_count
+            }
+        }
+        return jsonify(payload), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment history", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# ============================================================================
+# UC 2.17 - Edit Profile
+# ============================================================================
+
+@bp.put("/users/<int:user_id>")
+def update_user_profile(user_id: int) -> tuple[dict[str, object], int]:
+    """Update user profile information (UC 2.17)."""
+    try:
+        from .models import AuthAccount
+        
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        payload = request.get_json(silent=True) or {}
+        
+        # Update name if provided
+        if "name" in payload:
+            name = (payload.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "invalid_payload", "message": "name cannot be blank"}), 400
+            user.name = name
+        
+        # Update phone if provided
+        if "phone" in payload:
+            phone = (payload.get("phone") or "").strip() or None
+            user.phone = phone
+        
+        # Update password if provided
+        if "new_password" in payload:
+            new_password = payload.get("new_password") or ""
+            if not new_password:
+                return jsonify({"error": "invalid_payload", "message": "new_password cannot be blank"}), 400
+            
+            if len(new_password) < 6:
+                return jsonify({"error": "invalid_password", "message": "password must be at least 6 characters"}), 400
+            
+            # Update password hash
+            auth_account = AuthAccount.query.filter_by(user_id=user_id).first()
+            if not auth_account:
+                return jsonify({"error": "auth_account_not_found"}), 404
+            
+            auth_account.password_hash = generate_password_hash(new_password)
+            db.session.add(auth_account)
+        
+        # Update timestamp
+        user.updated_at = datetime.now(timezone.utc)
+        
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Profile updated successfully",
+            "user": user.to_dict_basic()
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update user profile", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500

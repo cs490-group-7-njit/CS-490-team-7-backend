@@ -337,3 +337,32 @@ class Review(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class ClientLoyalty(db.Model):
+    """Client loyalty points tracking (UC 2.10, 2.11)."""
+
+    __tablename__ = "client_loyalty"
+
+    client_loyalty_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    points_balance = db.Column(db.Integer, nullable=False, default=0)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    client = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "client_loyalty_id": self.client_loyalty_id,
+            "salon_id": self.salon_id,
+            "client_id": self.client_id,
+            "points_balance": self.points_balance,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
