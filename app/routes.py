@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty
+from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty, StaffRating
 
 bp = Blueprint("api", __name__)
 
@@ -2169,4 +2169,145 @@ def get_salon_analytics(salon_id: int) -> tuple[dict[str, object], int]:
     
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch salon analytics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 2.16 - Rate Staff
+# ============================================================================
+
+@bp.post("/staff/<int:staff_id>/rate")
+def rate_staff(staff_id: int) -> tuple[dict[str, object], int]:
+    """Create a new rating/review for a staff member (UC 2.16)."""
+    try:
+        from .models import StaffRating
+        
+        payload = request.get_json(silent=True) or {}
+
+        # Validate required fields
+        client_id = payload.get("client_id")
+        rating = payload.get("rating")
+        comment = (payload.get("comment") or "").strip() or None
+
+        if not client_id or rating is None:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "client_id and rating are required"
+                }),
+                400,
+            )
+
+        # Validate rating range
+        if not isinstance(rating, int) or rating < 1 or rating > 5:
+            return (
+                jsonify({
+                    "error": "invalid_rating",
+                    "message": "Rating must be an integer between 1 and 5"
+                }),
+                400,
+            )
+
+        # Check if staff exists
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+
+        # Check if client exists
+        client = User.query.get(client_id)
+        if not client:
+            return jsonify({"error": "client_not_found"}), 404
+
+        # Create staff rating
+        staff_rating = StaffRating(
+            staff_id=staff_id,
+            client_id=client_id,
+            rating=rating,
+            comment=comment,
+        )
+
+        db.session.add(staff_rating)
+        db.session.commit()
+
+        return jsonify({"staff_rating": staff_rating.to_dict()}), 201
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create staff rating", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/reviews")
+def get_staff_reviews(staff_id: int) -> tuple[dict[str, object], int]:
+    """Get reviews for a staff member with pagination (UC 2.16)."""
+    try:
+        from .models import StaffRating
+        
+        # Check if staff exists
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+
+        # Get pagination parameters
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+
+        # Validate pagination
+        if page < 1 or limit < 1:
+            return jsonify({"error": "invalid_pagination"}), 400
+        if limit > 50:
+            limit = 50
+
+        # Query reviews with pagination
+        pagination = StaffRating.query.filter_by(staff_id=staff_id).order_by(
+            StaffRating.created_at.desc()
+        ).paginate(page=page, per_page=limit)
+
+        reviews_data = [review.to_dict() for review in pagination.items]
+
+        return jsonify({
+            "staff_id": staff_id,
+            "reviews": reviews_data,
+            "pagination": {
+                "page": page,
+                "per_page": limit,
+                "total": pagination.total,
+                "pages": pagination.pages,
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch staff reviews", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/rating")
+def get_staff_rating(staff_id: int) -> tuple[dict[str, object], int]:
+    """Get average rating and stats for a staff member (UC 2.16)."""
+    try:
+        from .models import StaffRating
+        from sqlalchemy import func
+        
+        # Check if staff exists
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+
+        # Query aggregated rating data
+        rating_stats = db.session.query(
+            func.avg(StaffRating.rating).label("avg_rating"),
+            func.count(StaffRating.rating_id).label("total_ratings")
+        ).filter_by(staff_id=staff_id).first()
+
+        avg_rating = rating_stats.avg_rating or 0
+        total_ratings = rating_stats.total_ratings or 0
+
+        return jsonify({
+            "staff_id": staff_id,
+            "avg_rating": round(float(avg_rating), 2),
+            "total_ratings": total_ratings
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch staff rating", exc_info=exc)
         return jsonify({"error": "database_error"}), 500

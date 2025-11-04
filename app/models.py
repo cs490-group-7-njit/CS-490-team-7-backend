@@ -380,3 +380,37 @@ class ClientLoyalty(db.Model):
             "points_balance": self.points_balance,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class StaffRating(db.Model):
+    """Ratings and reviews for staff members (UC 2.16)."""
+
+    __tablename__ = "staff_ratings"
+
+    rating_id = db.Column(db.Integer, primary_key=True)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    rating = db.Column(db.Integer, nullable=False)  # 1-5 stars
+    comment = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    staff = db.relationship("Staff")
+    client = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.rating_id,
+            "staff_id": self.staff_id,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else "Anonymous",
+            "rating": self.rating,
+            "comment": self.comment,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
