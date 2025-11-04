@@ -36,7 +36,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config.update(test_config)
 
     # Allow the React dev server to call our API without CORS issues during development.
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    CORS(app, resources={r"/*": {"origins": "http://localhost:5173", "supports_credentials": True}}, allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
     db.init_app(app)
 
