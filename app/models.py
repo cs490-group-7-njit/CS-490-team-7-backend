@@ -11,6 +11,14 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Association table for favorite salons (UC 2.20)
+favorite_salons = db.Table(
+    "favorite_salons",
+    db.Column("user_id", db.Integer, db.ForeignKey("users.user_id"), primary_key=True),
+    db.Column("salon_id", db.Integer, db.ForeignKey("salons.salon_id"), primary_key=True),
+)
+
+
 class User(db.Model):
     __tablename__ = "users"
 
@@ -40,6 +48,12 @@ class User(db.Model):
 
     salons = db.relationship("Salon", back_populates="vendor", lazy="dynamic")
     auth_account = db.relationship("AuthAccount", back_populates="user", uselist=False)
+    favorite_salons = db.relationship(
+        "Salon",
+        secondary=favorite_salons,
+        backref="favorited_by",
+        lazy="dynamic"
+    )
 
     def to_dict_basic(self) -> dict[str, object]:
         return {

@@ -1953,3 +1953,142 @@ def update_user_profile(user_id: int) -> tuple[dict[str, object], int]:
         db.session.rollback()
         current_app.logger.exception("Failed to update user profile", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+# ============================================================================
+# UC 2.20 - Save Favorite Salons
+# ============================================================================
+
+@bp.post("/users/<int:user_id>/favorites/<int:salon_id>")
+def add_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object], int]:
+    """Add a salon to user's favorites (UC 2.20)."""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Check if already favorited
+        if user.favorite_salons.filter_by(salon_id=salon_id).first():
+            return jsonify({"error": "already_favorited"}), 400
+        
+        user.favorite_salons.append(salon)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Salon added to favorites",
+            "salon_id": salon_id
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to add favorite salon", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/users/<int:user_id>/favorites/<int:salon_id>")
+def remove_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object], int]:
+    """Remove a salon from user's favorites (UC 2.20)."""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        salon = user.favorite_salons.filter_by(salon_id=salon_id).first()
+        if not salon:
+            return jsonify({"error": "not_favorited"}), 404
+        
+        user.favorite_salons.remove(salon)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Salon removed from favorites",
+            "salon_id": salon_id
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to remove favorite salon", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/users/<int:user_id>/favorites")
+def get_favorite_salons(user_id: int) -> tuple[dict[str, object], int]:
+    """Get all favorite salons for a user (UC 2.20)."""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Pagination parameters
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+        
+        if limit > 50:
+            limit = 50
+        
+        # Query favorite salons with pagination
+        query = user.favorite_salons.filter(Salon.is_published == True)
+        total = query.count()
+        salons = query.offset((page - 1) * limit).limit(limit).all()
+        
+        payload = {
+            "salons": [
+                {
+                    "salon_id": s.salon_id,
+                    "name": s.name,
+                    "address": f"{s.address_line1}, {s.city}, {s.state} {s.postal_code}",
+                    "phone": s.phone,
+                    "description": s.description,
+                    "business_type": s.business_type,
+                    "vendor": {
+                        "id": s.vendor_id,
+                        "name": s.vendor.name if s.vendor else "Unknown"
+                    }
+                }
+                for s in salons
+            ],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "has_more": (page * limit) < total
+            }
+        }
+        
+        return jsonify(payload), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch favorite salons", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/is-favorite")
+def check_if_favorite(salon_id: int) -> tuple[dict[str, object], int]:
+    """Check if a salon is favorited by the current user (UC 2.20)."""
+    try:
+        # Get user_id from auth context (assuming JWT token has user info)
+        user_id = request.args.get("user_id", type=int)
+        if not user_id:
+            return jsonify({"error": "user_id_required"}), 400
+        
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        is_favorited = user.favorite_salons.filter_by(salon_id=salon_id).first() is not None
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "is_favorited": is_favorited
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to check favorite status", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
