@@ -2889,6 +2889,86 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             "redemption_rate": round((recent_redemptions / total_redemptions) * 100, 1) if total_redemptions > 0 else 0
         }
 
+        # --- UC 3.8: User Demographics ---
+        # Distribution by city and state (top 10 cities/states)
+        city_counts = db.session.query(
+            User.city, db.func.count(User.user_id)
+        ).group_by(User.city).order_by(db.func.count(User.user_id).desc()).limit(10).all()
+
+        state_counts = db.session.query(
+            User.state, db.func.count(User.user_id)
+        ).group_by(User.state).order_by(db.func.count(User.user_id).desc()).limit(10).all()
+
+        # Account age buckets (using created_at)
+        now = datetime.now(timezone.utc)
+        one_month = now - timedelta(days=30)
+        three_months = now - timedelta(days=90)
+        one_year = now - timedelta(days=365)
+
+        recent_users = User.query.filter(User.created_at >= one_month).count()
+        quarter_users = User.query.filter(User.created_at >= three_months, User.created_at < one_month).count()
+        year_users = User.query.filter(User.created_at >= one_year, User.created_at < three_months).count()
+        older_users = User.query.filter(User.created_at < one_year).count()
+
+        analytics_data["user_demographics"] = {
+            "by_city": {city or "Unknown": count for city, count in city_counts},
+            "by_state": {state or "Unknown": count for state, count in state_counts},
+            "account_age_buckets": {
+                "<1_month": recent_users,
+                "1-3_months": quarter_users,
+                "3-12_months": year_users,
+                ">1_year": older_users,
+            }
+        }
+
+        # --- UC 3.9: Retention Metrics ---
+        # 30-day retention: users created >30 days ago who had an appointment in last 30 days
+        thirty_days_ago = now - timedelta(days=30)
+        users_eligible = User.query.filter(User.created_at <= thirty_days_ago, User.role == 'client').count()
+        users_active_last_30 = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
+            Appointment.created_at >= thirty_days_ago,
+            Appointment.status == 'completed'
+        ).scalar() or 0
+
+        overall_retention_30d = round((users_active_last_30 / users_eligible) * 100, 1) if users_eligible > 0 else 0
+
+        # Repeat customer rate: proportion of clients with >1 completed appointment
+        repeat_customers = db.session.query(Appointment.client_id).filter(Appointment.status == 'completed').group_by(Appointment.client_id).having(db.func.count(Appointment.appointment_id) > 1).count()
+        total_clients_with_completed = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(Appointment.status == 'completed').scalar() or 0
+        repeat_rate = round((repeat_customers / total_clients_with_completed) * 100, 1) if total_clients_with_completed > 0 else 0
+
+        # Cohort retention over last 6 months (approx): for each signup month, % who had any appointment in following month
+        cohort_retention = []
+        for i in range(6):
+            cohort_start = (now.replace(day=1) - timedelta(days=i*30)).replace(day=1)
+            cohort_end = (cohort_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+            # users signed up in that cohort month
+            cohort_users = db.session.query(User.user_id).filter(User.created_at >= cohort_start, User.created_at <= cohort_end, User.role == 'client').all()
+            cohort_user_ids = [u.user_id for u in cohort_users]
+            if not cohort_user_ids:
+                cohort_retention.append({"month": cohort_start.strftime('%Y-%m'), "retention_next_month": None})
+                continue
+
+            next_month_start = (cohort_end + timedelta(days=1)).replace(day=1)
+            next_month_end = (next_month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+            retained_count = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
+                Appointment.client_id.in_(cohort_user_ids),
+                Appointment.created_at >= next_month_start,
+                Appointment.created_at <= next_month_end
+            ).scalar() or 0
+
+            retention_pct = round((retained_count / len(cohort_user_ids)) * 100, 1) if len(cohort_user_ids) > 0 else None
+
+            cohort_retention.append({"month": cohort_start.strftime('%Y-%m'), "retention_next_month": retention_pct})
+
+        analytics_data["retention_metrics"] = {
+            "retention_30d": overall_retention_30d,
+            "repeat_customer_rate": repeat_rate,
+            "cohort_retention_last_6_months": list(reversed(cohort_retention))
+        }
+
         return jsonify({"analytics": analytics_data}), 200
 
     except SQLAlchemyError as exc:
