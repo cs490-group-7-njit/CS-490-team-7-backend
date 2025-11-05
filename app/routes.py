@@ -1747,7 +1747,7 @@ def create_review(salon_id: int) -> tuple[dict[str, object], int]:
         rating = payload.get("rating")
         comment = (payload.get("comment") or "").strip() or None
 
-        if not client_id or rating is None:
+        if not client_id or not rating:
             return (
                 jsonify({
                     "error": "invalid_payload",
@@ -2715,6 +2715,178 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         analytics_data["recent_hourly_trends"] = {
             int(hour): count for hour, count in recent_hourly
+        }
+
+        # UC 3.6: Salon Revenue Tracking
+        # Top performing salons by revenue
+        salon_revenue = db.session.query(
+            Salon.salon_id,
+            Salon.name,
+            db.func.sum(Service.price).label('total_revenue'),
+            db.func.count(Appointment.appointment_id).label('total_appointments')
+        ).join(Appointment).join(Service).filter(
+            Appointment.status == "completed"
+        ).group_by(Salon.salon_id, Salon.name).order_by(
+            db.func.sum(Service.price).desc()
+        ).limit(10).all()
+
+        analytics_data["salon_revenue"] = {
+            "top_salons": [
+                {
+                    "id": salon_id,
+                    "name": name,
+                    "revenue": float(total_revenue),
+                    "appointments": total_appointments,
+                    "avg_revenue_per_appointment": round(float(total_revenue) / total_appointments, 2) if total_appointments > 0 else 0
+                }
+                for salon_id, name, total_revenue, total_appointments in salon_revenue
+            ]
+        }
+
+        # Revenue by salon category/business type
+        category_revenue = db.session.query(
+            Salon.business_type,
+            db.func.sum(Service.price).label('total_revenue'),
+            db.func.count(Appointment.appointment_id).label('total_appointments')
+        ).join(Appointment).join(Service).filter(
+            Appointment.status == "completed",
+            Salon.business_type.isnot(None)
+        ).group_by(Salon.business_type).order_by(
+            db.func.sum(Service.price).desc()
+        ).all()
+
+        analytics_data["revenue_by_category"] = {
+            category or "Uncategorized": {
+                "revenue": float(total_revenue),
+                "appointments": total_appointments,
+                "avg_revenue": round(float(total_revenue) / total_appointments, 2) if total_appointments > 0 else 0
+            }
+            for category, total_revenue, total_appointments in category_revenue
+        }
+
+        # Monthly revenue trends by salon (top 5 salons)
+        if salon_revenue:
+            top_salon_ids = [salon_id for salon_id, _, _, _ in salon_revenue[:5]]
+            salon_monthly_revenue = {}
+            
+            for salon_id in top_salon_ids:
+                salon = Salon.query.get(salon_id)
+                monthly_data = []
+                
+                for i in range(6):  # Last 6 months
+                    month_start = (now.replace(day=1) - timedelta(days=i*30)).replace(day=1)
+                    month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+                    
+                    revenue = db.session.query(
+                        db.func.sum(Service.price)
+                    ).join(Appointment).join(Salon).filter(
+                        Appointment.salon_id == salon_id,
+                        Appointment.status == "completed",
+                        Appointment.created_at >= month_start,
+                        Appointment.created_at <= month_end
+                    ).scalar() or 0
+                    
+                    monthly_data.append({
+                        "month": month_start.strftime("%Y-%m"),
+                        "revenue": float(revenue)
+                    })
+                
+                salon_monthly_revenue[salon.name] = monthly_data[::-1]  # Reverse to chronological order
+            
+            analytics_data["salon_revenue"]["monthly_trends"] = salon_monthly_revenue
+
+        # UC 3.7: Loyalty Program Monitoring
+        # Overall loyalty program statistics
+        total_loyalty_users = db.session.query(ClientLoyalty).count()
+        total_loyalty_points = db.session.query(
+            db.func.sum(ClientLoyalty.points_balance)
+        ).scalar() or 0
+        
+        # Points earned vs redeemed over time (last 6 months)
+        loyalty_activity = []
+        for i in range(6):
+            month_start = (now.replace(day=1) - timedelta(days=i*30)).replace(day=1)
+            month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            
+            # Points earned (from completed appointments)
+            points_earned = db.session.query(
+                db.func.sum(db.func.floor(Service.price / 100))  # 1 point per dollar
+            ).join(Appointment).filter(
+                Appointment.status == "completed",
+                Appointment.created_at >= month_start,
+                Appointment.created_at <= month_end
+            ).scalar() or 0
+            
+            # Points redeemed (from redemptions)
+            points_redeemed = db.session.query(
+                db.func.sum(LoyaltyRedemption.points_used)
+            ).filter(
+                LoyaltyRedemption.created_at >= month_start,
+                LoyaltyRedemption.created_at <= month_end
+            ).scalar() or 0
+            
+            loyalty_activity.append({
+                "month": month_start.strftime("%Y-%m"),
+                "earned": int(points_earned),
+                "redeemed": int(points_redeemed),
+                "net": int(points_earned - points_redeemed)
+            })
+        
+        analytics_data["loyalty_program"] = {
+            "overview": {
+                "total_users": total_loyalty_users,
+                "total_points": int(total_loyalty_points),
+                "avg_points_per_user": round(total_loyalty_points / total_loyalty_users, 1) if total_loyalty_users > 0 else 0,
+                "active_users": db.session.query(ClientLoyalty).filter(ClientLoyalty.points_balance > 0).count()
+            },
+            "activity_trends": loyalty_activity[::-1],  # Reverse to chronological order
+            "redemption_stats": {},
+            "user_engagement": {}
+        }
+
+        # Redemption statistics
+        total_redemptions = LoyaltyRedemption.query.count()
+        total_points_redeemed = db.session.query(
+            db.func.sum(LoyaltyRedemption.points_used)
+        ).scalar() or 0
+        
+        # Most popular redemptions
+        popular_redemptions = db.session.query(
+            LoyaltyRedemption.reward_type,
+            db.func.count(LoyaltyRedemption.redemption_id).label('count'),
+            db.func.sum(LoyaltyRedemption.points_used).label('total_points')
+        ).group_by(LoyaltyRedemption.reward_type).order_by(
+            db.func.count(LoyaltyRedemption.redemption_id).desc()
+        ).limit(5).all()
+        
+        analytics_data["loyalty_program"]["redemption_stats"] = {
+            "total_redemptions": total_redemptions,
+            "total_points_redeemed": int(total_points_redeemed),
+            "avg_points_per_redemption": round(total_points_redeemed / total_redemptions, 1) if total_redemptions > 0 else 0,
+            "popular_rewards": [
+                {
+                    "reward_type": reward_type,
+                    "count": count,
+                    "total_points": int(total_points)
+                }
+                for reward_type, count, total_points in popular_redemptions
+            ]
+        }
+
+        # User engagement metrics
+        high_engagement_users = db.session.query(ClientLoyalty).filter(
+            ClientLoyalty.points_balance >= 100
+        ).count()
+        
+        recent_redemptions = LoyaltyRedemption.query.filter(
+            LoyaltyRedemption.created_at >= now - timedelta(days=30)
+        ).count()
+        
+        analytics_data["loyalty_program"]["user_engagement"] = {
+            "high_engagement_users": high_engagement_users,  # Users with 100+ points
+            "engagement_rate": round((high_engagement_users / total_loyalty_users) * 100, 1) if total_loyalty_users > 0 else 0,
+            "recent_redemptions": recent_redemptions,
+            "redemption_rate": round((recent_redemptions / total_redemptions) * 100, 1) if total_redemptions > 0 else 0
         }
 
         return jsonify({"analytics": analytics_data}), 200
