@@ -1169,7 +1169,7 @@ def get_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], 
         if appointment.staff_id:
             staff = appointment.staff
             appointment_data["staff"] = {
-                "id": staff.staff_id,
+                "staff_id": staff.staff_id,
                 "title": staff.title,
                 "user": {"id": staff.user.user_id, "name": staff.user.name} if staff.user else None,
             }
