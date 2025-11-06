@@ -321,7 +321,7 @@ class Appointment(db.Model):
 
 
 class Review(db.Model):
-    """Reviews and ratings for salons (UC 2.8)."""
+    """Reviews and ratings for salons (UC 2.8, 1.11)."""
 
     __tablename__ = "reviews"
 
@@ -330,6 +330,8 @@ class Review(db.Model):
     client_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
     rating = db.Column(db.Integer, nullable=False)  # 1-5 stars
     comment = db.Column(db.Text)
+    vendor_reply = db.Column(db.Text, nullable=True)  # UC 1.11: Vendor response
+    vendor_reply_at = db.Column(db.DateTime, nullable=True)  # UC 1.11: When vendor replied
     created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     updated_at = db.Column(
         db.DateTime,
@@ -349,6 +351,8 @@ class Review(db.Model):
             "client_name": self.client.name if self.client else "Anonymous",
             "rating": self.rating,
             "comment": self.comment,
+            "vendor_reply": self.vendor_reply,
+            "vendor_reply_at": self.vendor_reply_at.isoformat() if self.vendor_reply_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
