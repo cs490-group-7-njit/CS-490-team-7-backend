@@ -1851,6 +1851,223 @@ def delete_review(review_id: int) -> tuple[dict[str, str], int]:
         current_app.logger.exception("Failed to delete review", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
+
+# UC 1.11 - Vendor Reply to Reviews
+# ============================================================================
+
+@bp.post("/reviews/<int:review_id>/reply")
+def add_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
+    """Vendor submits a reply to a client review (UC 1.11)."""
+    try:
+        review = Review.query.get(review_id)
+        if not review:
+            return jsonify({"error": "review_not_found"}), 404
+
+        payload = request.get_json(silent=True) or {}
+        vendor_reply = (payload.get("vendor_reply") or "").strip()
+
+        if not vendor_reply:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "vendor_reply cannot be empty"
+                }),
+                400,
+            )
+
+        # Validate vendor owns the salon
+        salon = Salon.query.get(review.salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Check vendor authorization (in production, use authenticated user)
+        vendor_id = payload.get("vendor_id")
+        if vendor_id and salon.vendor_id != vendor_id:
+            return (
+                jsonify({
+                    "error": "unauthorized",
+                    "message": "You can only reply to reviews for your own salon"
+                }),
+                403,
+            )
+
+        # Add vendor reply
+        review.vendor_reply = vendor_reply
+        review.vendor_reply_at = datetime.now(timezone.utc)
+        db.session.commit()
+
+        # Create notification for client
+        notification = Notification(
+            user_id=review.client_id,
+            title="Salon Owner Replied to Your Review",
+            message=f"The owner of {salon.name} has replied to your review.",
+            notification_type="review_reply",
+        )
+        db.session.add(notification)
+        db.session.commit()
+
+        return jsonify({"review": review.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to add vendor reply", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/reviews/<int:review_id>/reply")
+def update_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
+    """Vendor updates their reply to a review (UC 1.11)."""
+    try:
+        review = Review.query.get(review_id)
+        if not review:
+            return jsonify({"error": "review_not_found"}), 404
+
+        if not review.vendor_reply:
+            return (
+                jsonify({
+                    "error": "no_reply_found",
+                    "message": "This review does not have a vendor reply yet"
+                }),
+                404,
+            )
+
+        payload = request.get_json(silent=True) or {}
+        vendor_reply = (payload.get("vendor_reply") or "").strip()
+
+        if not vendor_reply:
+            return (
+                jsonify({
+                    "error": "invalid_payload",
+                    "message": "vendor_reply cannot be empty"
+                }),
+                400,
+            )
+
+        # Validate vendor owns the salon
+        salon = Salon.query.get(review.salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Check vendor authorization (in production, use authenticated user)
+        vendor_id = payload.get("vendor_id")
+        if vendor_id and salon.vendor_id != vendor_id:
+            return (
+                jsonify({
+                    "error": "unauthorized",
+                    "message": "You can only update replies for your own salon"
+                }),
+                403,
+            )
+
+        # Update vendor reply
+        review.vendor_reply = vendor_reply
+        review.vendor_reply_at = datetime.now(timezone.utc)
+        db.session.commit()
+
+        return jsonify({"review": review.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update vendor reply", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/reviews/<int:review_id>/reply")
+def delete_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
+    """Vendor deletes their reply to a review (UC 1.11)."""
+    try:
+        review = Review.query.get(review_id)
+        if not review:
+            return jsonify({"error": "review_not_found"}), 404
+
+        if not review.vendor_reply:
+            return (
+                jsonify({
+                    "error": "no_reply_found",
+                    "message": "This review does not have a vendor reply"
+                }),
+                404,
+            )
+
+        # Validate vendor owns the salon
+        salon = Salon.query.get(review.salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Check vendor authorization (in production, use authenticated user)
+        vendor_id = request.args.get("vendor_id", type=int)
+        if vendor_id and salon.vendor_id != vendor_id:
+            return (
+                jsonify({
+                    "error": "unauthorized",
+                    "message": "You can only delete replies for your own salon"
+                }),
+                403,
+            )
+
+        # Delete vendor reply
+        review.vendor_reply = None
+        review.vendor_reply_at = None
+        db.session.commit()
+
+        return jsonify({"review": review.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete vendor reply", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/reviews-with-replies")
+def get_salon_reviews_with_replies(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all reviews for a salon including vendor replies (UC 1.11).
+    
+    Query Parameters:
+    - with_replies_only: If true, only return reviews with vendor replies (optional)
+    - limit: Max reviews to return (default: 50, max: 100)
+    - offset: Pagination offset (default: 0)
+    """
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Get query parameters
+        with_replies_only = request.args.get('with_replies_only', 'false').lower() == 'true'
+        limit = request.args.get('limit', default=50, type=int)
+        offset = request.args.get('offset', default=0, type=int)
+
+        limit = min(max(limit, 1), 100)
+        offset = max(offset, 0)
+
+        # Build query
+        query = Review.query.filter(Review.salon_id == salon_id)
+
+        # Filter for only reviews with replies if requested
+        if with_replies_only:
+            query = query.filter(Review.vendor_reply.isnot(None))
+
+        # Get total count
+        total_count = query.count()
+
+        # Order by most recent first
+        reviews = query.order_by(Review.created_at.desc()).limit(limit).offset(offset).all()
+
+        payload = {
+            "reviews": [review.to_dict() for review in reviews],
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "has_more": (offset + limit) < total_count
+            }
+        }
+        return jsonify(payload), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon reviews with replies", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
 # --- END: Client Use Case 2.3 - Book Appointments ---
 
 # ============================================================================
