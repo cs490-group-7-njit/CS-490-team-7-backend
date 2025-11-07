@@ -57,6 +57,8 @@ class Salon(db.Model):
     salon_id = db.Column(db.Integer, primary_key=True)
     vendor_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
     name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    business_type = db.Column(db.String(100))
     address_line1 = db.Column(db.String(150))
     address_line2 = db.Column(db.String(150))
     city = db.Column(db.String(100))
@@ -90,6 +92,8 @@ class Salon(db.Model):
         return {
             "id": self.salon_id,
             "name": self.name,
+            "description": self.description,
+            "business_type": self.business_type,
             "address": {
                 "line1": self.address_line1,
                 "line2": self.address_line2,
@@ -102,7 +106,6 @@ class Salon(db.Model):
             "verification_status": self.verification_status,
             "vendor": self.vendor.to_dict_basic() if self.vendor else None,
         }
-
 
 class AuthAccount(db.Model):
     __tablename__ = "auth_accounts"
