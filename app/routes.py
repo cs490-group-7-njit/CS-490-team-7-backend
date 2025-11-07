@@ -4281,3 +4281,239 @@ def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str,
     except Exception as exc:
         current_app.logger.exception("Failed to get health alerts", exc_info=exc)
         return jsonify({"error": "alerts_check_failed"}), 500
+
+# ============================================================================
+# UC 1.14 - Block Time Slots
+# ============================================================================
+
+@bp.post("/staff/<int:staff_id>/time-blocks")
+def create_time_block(staff_id: int) -> tuple[dict[str, object], int]:
+    """Create a time block to prevent bookings (UC 1.14)."""
+    try:
+        from datetime import datetime
+        from .models import Staff, StaffTimeBlock
+        
+        data = request.json or {}
+        reason = data.get("reason", "").strip()
+        block_start = data.get("block_start")
+        block_end = data.get("block_end")
+        
+        if not reason or not block_start or not block_end:
+            return jsonify({"error": "missing_fields"}), 400
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if staff.salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse dates
+        try:
+            block_start_dt = datetime.fromisoformat(block_start)
+            block_end_dt = datetime.fromisoformat(block_end)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Validate dates
+        if block_start_dt >= block_end_dt:
+            return jsonify({"error": "invalid_time_range"}), 400
+        
+        # Create time block
+        time_block = StaffTimeBlock(
+            staff_id=staff_id,
+            block_start=block_start_dt,
+            block_end=block_end_dt,
+            reason=reason
+        )
+        db.session.add(time_block)
+        db.session.commit()
+        
+        return jsonify(time_block.to_dict()), 201
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to create time block", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/time-blocks")
+def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, object], int]:
+    """Get all time blocks for a staff member (UC 1.14)."""
+    try:
+        from .models import Staff, StaffTimeBlock
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        # Verify access
+        if user.role == "vendor" and staff.salon.vendor_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        elif user.role == "staff" and staff.user_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get time blocks
+        time_blocks = StaffTimeBlock.query.filter_by(staff_id=staff_id).order_by(
+            StaffTimeBlock.block_start
+        ).all()
+        
+        return jsonify({
+            "staff_id": staff_id,
+            "time_blocks": [block.to_dict() for block in time_blocks]
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch time blocks", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/time-blocks/<int:block_id>")
+def update_time_block(block_id: int) -> tuple[dict[str, object], int]:
+    """Update a time block (UC 1.14)."""
+    try:
+        from datetime import datetime
+        from .models import StaffTimeBlock
+        
+        data = request.json or {}
+        reason = data.get("reason", "").strip()
+        block_start = data.get("block_start")
+        block_end = data.get("block_end")
+        
+        if not reason or not block_start or not block_end:
+            return jsonify({"error": "missing_fields"}), 400
+        
+        # Get time block
+        time_block = StaffTimeBlock.query.get(block_id)
+        if not time_block:
+            return jsonify({"error": "time_block_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if time_block.staff.salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse dates
+        try:
+            block_start_dt = datetime.fromisoformat(block_start)
+            block_end_dt = datetime.fromisoformat(block_end)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Validate dates
+        if block_start_dt >= block_end_dt:
+            return jsonify({"error": "invalid_time_range"}), 400
+        
+        # Update time block
+        time_block.block_start = block_start_dt
+        time_block.block_end = block_end_dt
+        time_block.reason = reason
+        db.session.commit()
+        
+        return jsonify(time_block.to_dict()), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to update time block", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/time-blocks/<int:block_id>")
+def delete_time_block(block_id: int) -> tuple[dict[str, object], int]:
+    """Delete a time block (UC 1.14)."""
+    try:
+        from .models import StaffTimeBlock
+        
+        # Get time block
+        time_block = StaffTimeBlock.query.get(block_id)
+        if not time_block:
+            return jsonify({"error": "time_block_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if time_block.staff.salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Delete time block
+        db.session.delete(time_block)
+        db.session.commit()
+        
+        return jsonify({"success": True}), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to delete time block", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/time-blocks/<string:date>")
+def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, object], int]:
+    """Get time blocks for a specific date (UC 1.14)."""
+    try:
+        from datetime import datetime
+        from .models import Staff, StaffTimeBlock
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        # Verify access
+        if user.role == "vendor" and staff.salon.vendor_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        elif user.role == "staff" and staff.user_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse date
+        try:
+            target_date = datetime.fromisoformat(date)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Get start and end of day
+        day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get time blocks for this day
+        time_blocks = StaffTimeBlock.query.filter(
+            StaffTimeBlock.staff_id == staff_id,
+            StaffTimeBlock.block_start >= day_start,
+            StaffTimeBlock.block_start <= day_end
+        ).order_by(StaffTimeBlock.block_start).all()
+        
+        return jsonify({
+            "staff_id": staff_id,
+            "date": date,
+            "time_blocks": [block.to_dict() for block in time_blocks]
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch time blocks for date", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
