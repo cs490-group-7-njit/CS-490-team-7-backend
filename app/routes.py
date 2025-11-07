@@ -40,7 +40,7 @@ def list_salons() -> tuple[dict[str, list[dict[str, object]]], int]:
     try:
         salons = (
             Salon.query.options(joinedload(Salon.vendor))
-            .filter(Salon.is_published.is_(True))
+            # .filter(Salon.is_published.is_(True))
             .order_by(Salon.created_at.desc())
             .limit(12)
             .all()
@@ -64,6 +64,7 @@ def create_salon() -> tuple[dict[str, object], int]:
     address_line1 = (payload.get("address_line1") or "").strip() or None
     address_line2 = (payload.get("address_line2") or "").strip() or None
     city = (payload.get("city") or "").strip() or None
+    description = (payload.get("description") or "").strip() or None
     state = (payload.get("state") or "").strip() or None
     postal_code = (payload.get("postal_code") or "").strip() or None
     phone = (payload.get("phone") or "").strip() or None
@@ -97,6 +98,7 @@ def create_salon() -> tuple[dict[str, object], int]:
             address_line1=address_line1,
             address_line2=address_line2,
             city=city,
+            description=description,
             state=state,
             postal_code=postal_code,
             phone=phone,
@@ -113,6 +115,68 @@ def create_salon() -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
     return jsonify({"salon": new_salon.to_dict()}), 201
+
+
+@bp.put("/salons/<int:salon_id>")
+def update_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
+    """Update salon details (for vendors managing their salon)."""
+    payload = request.get_json(silent=True) or {}
+
+    # Extract fields that can be updated
+    name = (payload.get("name") or "").strip()
+    description = (payload.get("description") or "").strip()
+    business_type = (payload.get("business_type") or "").strip() or None
+
+    # ! TODO: Implement proper authentication
+    # # The vendor_id should come from the authenticated user (for now, accept from payload)
+    # vendor_id = payload.get("vendor_id")
+
+    # if not vendor_id:
+    #     return jsonify({
+    #         "error": "invalid_payload",
+    #         "message": "vendor_id is required"
+    #     }), 400
+
+    if not name:
+        return jsonify({
+            "error": "invalid_payload",
+            "message": "name cannot be blank"
+        }), 400
+
+    try:
+        # Fetch the salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({
+                "error": "not_found",
+                "message": f"salon_id {salon_id} does not exist"
+            }), 404
+
+        # # Verify ownership
+        # if salon.vendor_id != vendor_id:
+        #     return jsonify({
+        #         "error": "forbidden",
+        #         "message": "you are not authorized to modify this salon"
+        #     }), 403
+
+        # Update allowed fields
+        salon.name = name
+        salon.description = description
+        salon.business_type = business_type
+        salon.updated_at = datetime.now(timezone.utc)
+
+        db.session.add(salon)
+        db.session.commit()
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update salon details", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    return jsonify({
+        "message": "Salon details updated successfully",
+        "salon": salon.to_dict()
+    }), 200
 
 
 @bp.post("/auth/register")
