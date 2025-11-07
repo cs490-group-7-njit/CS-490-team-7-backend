@@ -10,6 +10,7 @@ from flask_cors import CORS
 
 from .extensions import db
 from .routes import bp as api_bp
+from .routes_extended import bp_ext as api_ext_bp
 
 # Load environment variables from a local .env file if present.
 load_dotenv()
@@ -44,5 +45,6 @@ def create_app(test_config: dict | None = None) -> Flask:
     from . import models  # noqa: F401
 
     app.register_blueprint(api_bp)
+    app.register_blueprint(api_ext_bp)
 
     return app
