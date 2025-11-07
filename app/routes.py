@@ -3947,6 +3947,163 @@ def get_health_alerts() -> tuple[dict[str, object], int]:
             "warning_count": sum(1 for a in active_alerts if a["severity"] == "warning"),
             "last_check": now.isoformat()
         }), 200
+
+
+# ============================================================================
+# UC 1.12 - Send Appointment Memos
+# ============================================================================
+
+@bp.post("/appointments/<int:appointment_id>/memos")
+def create_appointment_memo(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Vendor creates a memo/note for an appointment (UC 1.12)."""
+    try:
+        from .models import AppointmentMemo, Appointment
+        
+        data = request.json or {}
+        content = data.get("content", "").strip()
+        
+        if not content:
+            return jsonify({"error": "content_required"}), 400
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        vendor = User.query.get(vendor_id)
+        if not vendor or vendor.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if appointment.salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Create memo
+        memo = AppointmentMemo(
+            appointment_id=appointment_id,
+            vendor_id=vendor_id,
+            content=content
+        )
+        db.session.add(memo)
+        db.session.commit()
+        
+        # Create notification for client
+        notification = Notification(
+            user_id=appointment.client_id,
+            title="Appointment Note",
+            message=f"You received a note from {appointment.salon.name}",
+            notification_type="appointment_memo",
+            related_id=appointment_id
+        )
+        db.session.add(notification)
+        db.session.commit()
+        
+        return jsonify(memo.to_dict()), 201
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to create appointment memo", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/appointments/<int:appointment_id>/memos")
+def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Get all memos for an appointment (UC 1.12)."""
+    try:
+        from .models import AppointmentMemo, Appointment
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        # Verify access (client can see their own, vendor can see their salon's)
+        if user.role == "client" and appointment.client_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        elif user.role == "vendor" and appointment.salon.vendor_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get memos
+        memos = AppointmentMemo.query.filter_by(appointment_id=appointment_id).order_by(
+            AppointmentMemo.created_at.desc()
+        ).all()
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "memos": [memo.to_dict() for memo in memos]
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment memos", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/memos/<int:memo_id>")
+def update_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
+    """Vendor updates a memo (UC 1.12)."""
+    try:
+        from .models import AppointmentMemo
+        
+        data = request.json or {}
+        content = data.get("content", "").strip()
+        
+        if not content:
+            return jsonify({"error": "content_required"}), 400
+        
+        # Get memo
+        memo = AppointmentMemo.query.get(memo_id)
+        if not memo:
+            return jsonify({"error": "memo_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        if memo.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Update memo
+        memo.content = content
+        db.session.commit()
+        
+        return jsonify(memo.to_dict()), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to update appointment memo", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/memos/<int:memo_id>")
+def delete_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
+    """Vendor deletes a memo (UC 1.12)."""
+    try:
+        from .models import AppointmentMemo
+        
+        # Get memo
+        memo = AppointmentMemo.query.get(memo_id)
+        if not memo:
+            return jsonify({"error": "memo_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        if memo.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Delete memo
+        db.session.delete(memo)
+        db.session.commit()
+        
+        return jsonify({"success": True}), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to delete appointment memo", exc_info=exc)
+        db.session.rollback()
+        return jsonify({"error": "database_error"}), 500
         
     except Exception as exc:
         current_app.logger.exception("Failed to get health alerts", exc_info=exc)
