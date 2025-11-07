@@ -708,3 +708,35 @@ class ProductPurchase(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+# UC 1.12: Appointment Memos
+class AppointmentMemo(db.Model):
+    """Vendor memos/notes for appointments sent to clients."""
+
+    __tablename__ = "appointment_memos"
+
+    memo_id = db.Column(db.Integer, primary_key=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.appointment_id"), nullable=False)
+    vendor_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    appointment = db.relationship("Appointment")
+    vendor = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.memo_id,
+            "appointment_id": self.appointment_id,
+            "vendor_id": self.vendor_id,
+            "content": self.content,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
