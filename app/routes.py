@@ -4108,3 +4108,176 @@ def delete_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
     except Exception as exc:
         current_app.logger.exception("Failed to get health alerts", exc_info=exc)
         return jsonify({"error": "alerts_check_failed"}), 500
+
+# ============================================================================
+# UC 1.13 - View Daily Schedule
+# ============================================================================
+
+@bp.get("/staff/<int:staff_id>/schedule/<string:date>")
+def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object], int]:
+    """Get daily schedule for a staff member (UC 1.13)."""
+    try:
+        from datetime import datetime
+        from .models import Staff, Appointment
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        # Verify access (vendor can see their own staff, staff can see their own schedule)
+        if user.role == "vendor" and staff.salon.vendor_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        elif user.role == "staff" and staff.user_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse date
+        try:
+            schedule_date = datetime.fromisoformat(date)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Get start and end of day
+        day_start = schedule_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = schedule_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get appointments for this staff member on this day
+        appointments = Appointment.query.filter(
+            Appointment.staff_id == staff_id,
+            Appointment.starts_at >= day_start,
+            Appointment.starts_at <= day_end,
+            Appointment.status.in_(["booked", "completed"])
+        ).order_by(Appointment.starts_at).all()
+        
+        # Get business hours
+        salon = staff.salon
+        salon_hours = {
+            "opening_time": "09:00",  # Default opening
+            "closing_time": "17:00"   # Default closing
+        }
+        
+        # Get time blocks (unavailable times)
+        from .models import StaffTimeBlock
+        time_blocks = StaffTimeBlock.query.filter(
+            StaffTimeBlock.staff_id == staff_id,
+            StaffTimeBlock.block_start >= day_start,
+            StaffTimeBlock.block_start <= day_end
+        ).all()
+        
+        return jsonify({
+            "date": date,
+            "staff_id": staff_id,
+            "staff_name": staff.user.name if staff.user else f"Staff {staff_id}",
+            "salon_id": salon.salon_id,
+            "salon_name": salon.name,
+            "business_hours": salon_hours,
+            "appointments": [
+                {
+                    "id": apt.appointment_id,
+                    "client_id": apt.client_id,
+                    "client_name": apt.client.name if apt.client else "Unknown",
+                    "service": apt.service.name if apt.service else "Unknown",
+                    "starts_at": apt.starts_at.isoformat(),
+                    "ends_at": apt.ends_at.isoformat(),
+                    "status": apt.status,
+                    "notes": apt.notes
+                }
+                for apt in appointments
+            ],
+            "unavailable_times": [
+                {
+                    "id": block.block_id,
+                    "reason": block.reason,
+                    "starts_at": block.block_start.isoformat(),
+                    "ends_at": block.block_end.isoformat()
+                }
+                for block in time_blocks
+            ]
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch staff daily schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/staff/<int:staff_id>/schedule/week/<string:start_date>")
+def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str, object], int]:
+    """Get weekly schedule for a staff member (UC 1.13)."""
+    try:
+        from datetime import datetime, timedelta
+        from .models import Staff, Appointment
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        
+        # Verify access
+        if user.role == "vendor" and staff.salon.vendor_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        elif user.role == "staff" and staff.user_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse date
+        try:
+            week_start = datetime.fromisoformat(start_date)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Get appointments for this staff member for the week
+        week_end = week_start + timedelta(days=7)
+        day_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = week_end.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        appointments = Appointment.query.filter(
+            Appointment.staff_id == staff_id,
+            Appointment.starts_at >= day_start,
+            Appointment.starts_at <= day_end,
+            Appointment.status.in_(["booked", "completed"])
+        ).order_by(Appointment.starts_at).all()
+        
+        # Group appointments by day
+        schedule_by_day = {}
+        for apt in appointments:
+            day_key = apt.starts_at.date().isoformat()
+            if day_key not in schedule_by_day:
+                schedule_by_day[day_key] = []
+            schedule_by_day[day_key].append({
+                "id": apt.appointment_id,
+                "client_id": apt.client_id,
+                "client_name": apt.client.name if apt.client else "Unknown",
+                "service": apt.service.name if apt.service else "Unknown",
+                "starts_at": apt.starts_at.isoformat(),
+                "ends_at": apt.ends_at.isoformat(),
+                "status": apt.status,
+                "notes": apt.notes
+            })
+        
+        salon = staff.salon
+        
+        return jsonify({
+            "week_start": start_date,
+            "week_end": (week_start + timedelta(days=6)).date().isoformat(),
+            "staff_id": staff_id,
+            "staff_name": staff.user.name if staff.user else f"Staff {staff_id}",
+            "salon_id": salon.salon_id,
+            "salon_name": salon.name,
+            "schedule_by_day": schedule_by_day,
+            "total_appointments": len(appointments)
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch staff weekly schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    
+    except Exception as exc:
+        current_app.logger.exception("Failed to get health alerts", exc_info=exc)
+        return jsonify({"error": "alerts_check_failed"}), 500
