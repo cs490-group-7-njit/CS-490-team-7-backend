@@ -484,3 +484,223 @@ class Transaction(db.Model):
             "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# UC 2.5 - Notifications
+class Notification(db.Model):
+    __tablename__ = "notifications"
+
+    notification_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.appointment_id"), nullable=True)
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    notification_type = db.Column(
+        db.Enum(
+            "appointment_confirmed",
+            "appointment_cancelled",
+            "appointment_rescheduled",
+            "appointment_completed",
+            "message_received",
+            "discount_alert",
+            "loyalty_points_earned",
+            "loyalty_redeemed",
+            name="notification_type",
+            native_enum=False,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
+    is_read = db.Column(db.Boolean, nullable=False, server_default="0")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+
+    user = db.relationship("User")
+    appointment = db.relationship("Appointment")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.notification_id,
+            "user_id": self.user_id,
+            "appointment_id": self.appointment_id,
+            "title": self.title,
+            "message": self.message,
+            "notification_type": self.notification_type,
+            "is_read": self.is_read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# UC 2.7 - Messaging
+class Message(db.Model):
+    __tablename__ = "messages"
+
+    message_id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=True)
+    subject = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, server_default="0")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    sender = db.relationship("User", foreign_keys=[sender_id])
+    recipient = db.relationship("User", foreign_keys=[recipient_id])
+    salon = db.relationship("Salon")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.message_id,
+            "sender_id": self.sender_id,
+            "recipient_id": self.recipient_id,
+            "salon_id": self.salon_id,
+            "subject": self.subject,
+            "body": self.body,
+            "is_read": self.is_read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# UC 2.13 - Loyalty Redemption
+class LoyaltyRedemption(db.Model):
+    __tablename__ = "loyalty_redemptions"
+
+    redemption_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    points_redeemed = db.Column(db.Integer, nullable=False)
+    discount_code = db.Column(db.String(50), unique=True, nullable=False)
+    discount_value_cents = db.Column(db.Integer, nullable=False)
+    is_used = db.Column(db.Boolean, nullable=False, server_default="0")
+    redeemed_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    used_at = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+
+    user = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.redemption_id,
+            "user_id": self.user_id,
+            "points_redeemed": self.points_redeemed,
+            "discount_code": self.discount_code,
+            "discount_value_cents": self.discount_value_cents,
+            "discount_value_dollars": self.discount_value_cents / 100.0,
+            "is_used": self.is_used,
+            "redeemed_at": self.redeemed_at.isoformat() if self.redeemed_at else None,
+            "used_at": self.used_at.isoformat() if self.used_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
+
+
+# UC 2.14 - Discount Alerts
+class DiscountAlert(db.Model):
+    __tablename__ = "discount_alerts"
+
+    alert_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=True)
+    discount_percentage = db.Column(db.Integer, nullable=False)
+    discount_cents = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, server_default="0")
+    is_dismissed = db.Column(db.Boolean, nullable=False, server_default="0")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    expires_at = db.Column(db.DateTime, nullable=False)
+
+    user = db.relationship("User")
+    salon = db.relationship("Salon")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.alert_id,
+            "user_id": self.user_id,
+            "salon_id": self.salon_id,
+            "discount_percentage": self.discount_percentage,
+            "discount_cents": self.discount_cents,
+            "discount_dollars": self.discount_cents / 100.0,
+            "description": self.description,
+            "is_read": self.is_read,
+            "is_dismissed": self.is_dismissed,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
+
+
+# UC 2.15 - Products
+class Product(db.Model):
+    __tablename__ = "products"
+
+    product_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    price_cents = db.Column(db.Integer, nullable=False)
+    stock_quantity = db.Column(db.Integer, nullable=False, server_default="0")
+    category = db.Column(db.String(100))
+    is_available = db.Column(db.Boolean, nullable=False, server_default="1")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    salon = db.relationship("Salon")
+    purchases = db.relationship("ProductPurchase", back_populates="product")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.product_id,
+            "salon_id": self.salon_id,
+            "name": self.name,
+            "description": self.description,
+            "price_cents": self.price_cents,
+            "price_dollars": self.price_cents / 100.0,
+            "stock_quantity": self.stock_quantity,
+            "category": self.category,
+            "is_available": self.is_available,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ProductPurchase(db.Model):
+    __tablename__ = "product_purchases"
+
+    purchase_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey("products.product_id"), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_price_cents = db.Column(db.Integer, nullable=False)
+    total_price_cents = db.Column(db.Integer, nullable=False)
+    order_status = db.Column(
+        db.Enum(
+            "pending",
+            "confirmed",
+            "shipped",
+            "delivered",
+            "cancelled",
+            name="product_order_status",
+            native_enum=False,
+            validate_strings=True,
+        ),
+        nullable=False,
+        server_default="pending",
+    )
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    user = db.relationship("User")
+    product = db.relationship("Product", back_populates="purchases")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.purchase_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "quantity": self.quantity,
+            "unit_price_cents": self.unit_price_cents,
+            "unit_price_dollars": self.unit_price_cents / 100.0,
+            "total_price_cents": self.total_price_cents,
+            "total_price_dollars": self.total_price_cents / 100.0,
+            "order_status": self.order_status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

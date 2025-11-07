@@ -11,7 +11,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty, StaffRating
+from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty, StaffRating, Notification, Message, LoyaltyRedemption, DiscountAlert, Product, ProductPurchase
 
 bp = Blueprint("api", __name__)
 
