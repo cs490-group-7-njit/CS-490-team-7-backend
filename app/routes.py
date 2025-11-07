@@ -2311,3 +2311,200 @@ def get_staff_rating(staff_id: int) -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch staff rating", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ===== Payment Methods (UC 2.18) =====
+
+@bp.get("/users/<int:user_id>/payment-methods")
+def get_payment_methods(user_id: int) -> tuple[dict[str, object], int]:
+    """Get all payment methods for a user (UC 2.18)."""
+    try:
+        from .models import PaymentMethod
+
+        payment_methods = PaymentMethod.query.filter_by(user_id=user_id).all()
+        return jsonify({
+            "payment_methods": [pm.to_dict() for pm in payment_methods]
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch payment methods", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/users/<int:user_id>/payment-methods")
+def add_payment_method(user_id: int) -> tuple[dict[str, object], int]:
+    """Add a new payment method for a user (UC 2.18)."""
+    try:
+        from .models import PaymentMethod, User
+
+        # Verify user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "not_found", "message": "User not found"}), 404
+
+        data = request.get_json()
+
+        # Validate required fields
+        required = ["card_holder_name", "card_number", "card_brand", "expiry_month", "expiry_year"]
+        if not all(data.get(field) for field in required):
+            return jsonify({"error": "invalid_request"}), 400
+
+        # Extract last 4 digits
+        card_number = str(data.get("card_number", "")).replace(" ", "")
+        if len(card_number) < 4:
+            return jsonify({"error": "invalid_card_number"}), 400
+
+        card_last_four = card_number[-4:]
+
+        # If this is the first card, make it default
+        is_default = data.get("is_default", False)
+        existing_methods = PaymentMethod.query.filter_by(user_id=user_id).count()
+        if existing_methods == 0:
+            is_default = True
+
+        payment_method = PaymentMethod(
+            user_id=user_id,
+            card_holder_name=data.get("card_holder_name"),
+            card_number_last_four=card_last_four,
+            card_brand=data.get("card_brand"),
+            expiry_month=int(data.get("expiry_month")),
+            expiry_year=int(data.get("expiry_year")),
+            is_default=is_default,
+        )
+
+        db.session.add(payment_method)
+        db.session.commit()
+
+        return jsonify({"payment_method": payment_method.to_dict()}), 201
+
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": "invalid_request"}), 400
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to add payment method", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/users/<int:user_id>/payment-methods/<int:payment_method_id>")
+def delete_payment_method(user_id: int, payment_method_id: int) -> tuple[dict[str, object], int]:
+    """Delete a payment method (UC 2.18)."""
+    try:
+        from .models import PaymentMethod
+
+        payment_method = PaymentMethod.query.filter_by(
+            payment_method_id=payment_method_id,
+            user_id=user_id
+        ).first()
+
+        if not payment_method:
+            return jsonify({"error": "not_found"}), 404
+
+        db.session.delete(payment_method)
+        db.session.commit()
+
+        return jsonify({"message": "Payment method deleted"}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete payment method", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/users/<int:user_id>/payment-methods/<int:payment_method_id>/default")
+def set_default_payment_method(user_id: int, payment_method_id: int) -> tuple[dict[str, object], int]:
+    """Set a payment method as default (UC 2.18)."""
+    try:
+        from .models import PaymentMethod
+
+        payment_method = PaymentMethod.query.filter_by(
+            payment_method_id=payment_method_id,
+            user_id=user_id
+        ).first()
+
+        if not payment_method:
+            return jsonify({"error": "not_found"}), 404
+
+        # Unset all other defaults
+        PaymentMethod.query.filter_by(user_id=user_id).update({"is_default": False})
+        payment_method.is_default = True
+        db.session.commit()
+
+        return jsonify({"payment_method": payment_method.to_dict()}), 200
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to set default payment method", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ===== Transactions (UC 2.19) =====
+
+@bp.get("/users/<int:user_id>/transactions")
+def get_transactions(user_id: int) -> tuple[dict[str, object], int]:
+    """Get payment history for a user (UC 2.19)."""
+    try:
+        from .models import Transaction
+
+        # Get query parameters
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+        limit = min(limit, 50)  # Max 50 per page
+
+        transactions = Transaction.query.filter_by(user_id=user_id).order_by(
+            Transaction.transaction_date.desc()
+        ).paginate(page=page, per_page=limit)
+
+        return jsonify({
+            "transactions": [t.to_dict() for t in transactions.items],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": transactions.total,
+                "pages": transactions.pages,
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch transactions", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/users/<int:user_id>/transactions")
+def create_transaction(user_id: int) -> tuple[dict[str, object], int]:
+    """Create a transaction record (UC 2.19)."""
+    try:
+        from .models import Transaction, Appointment
+
+        data = request.get_json()
+
+        # Validate required fields
+        if not data.get("appointment_id") or not data.get("amount_cents"):
+            return jsonify({"error": "invalid_request"}), 400
+
+        appointment_id = data.get("appointment_id")
+        amount_cents = int(data.get("amount_cents"))
+
+        # Verify appointment exists and belongs to this user
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment or appointment.client_id != user_id:
+            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+
+        transaction = Transaction(
+            user_id=user_id,
+            appointment_id=appointment_id,
+            payment_method_id=data.get("payment_method_id"),
+            amount_cents=amount_cents,
+            status=data.get("status", "completed"),
+        )
+
+        db.session.add(transaction)
+        db.session.commit()
+
+        return jsonify({"transaction": transaction.to_dict()}), 201
+
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": "invalid_request"}), 400
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create transaction", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500

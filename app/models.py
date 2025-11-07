@@ -58,6 +58,7 @@ class User(db.Model):
     def to_dict_basic(self) -> dict[str, object]:
         return {
             "id": self.user_id,
+            "user_id": self.user_id,
             "name": self.name,
             "email": self.email,
             "role": self.role,
@@ -413,4 +414,73 @@ class StaffRating(db.Model):
             "comment": self.comment,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PaymentMethod(db.Model):
+    """Payment methods for clients (UC 2.18)."""
+
+    __tablename__ = "payment_methods"
+
+    payment_method_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    card_holder_name = db.Column(db.String(255), nullable=False)
+    card_number_last_four = db.Column(db.String(4), nullable=False)
+    card_brand = db.Column(db.String(50), nullable=False)  # Visa, Mastercard, Amex
+    expiry_month = db.Column(db.Integer, nullable=False)
+    expiry_year = db.Column(db.Integer, nullable=False)
+    is_default = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    user = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.payment_method_id,
+            "user_id": self.user_id,
+            "card_holder_name": self.card_holder_name,
+            "card_number_last_four": self.card_number_last_four,
+            "card_brand": self.card_brand,
+            "expiry_month": self.expiry_month,
+            "expiry_year": self.expiry_year,
+            "is_default": self.is_default,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Transaction(db.Model):
+    """Payment transactions (UC 2.19)."""
+
+    __tablename__ = "transactions"
+
+    transaction_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.appointment_id"), nullable=False)
+    payment_method_id = db.Column(db.Integer, db.ForeignKey("payment_methods.payment_method_id"), nullable=True)
+    amount_cents = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(50), nullable=False, default="completed")  # completed, pending, failed, refunded
+    transaction_date = db.Column(db.DateTime, nullable=False, default=utc_now)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+
+    user = db.relationship("User")
+    appointment = db.relationship("Appointment")
+    payment_method = db.relationship("PaymentMethod")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.transaction_id,
+            "user_id": self.user_id,
+            "appointment_id": self.appointment_id,
+            "payment_method_id": self.payment_method_id,
+            "amount_cents": self.amount_cents,
+            "amount_dollars": self.amount_cents / 100.0,
+            "status": self.status,
+            "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
