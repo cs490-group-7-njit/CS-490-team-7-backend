@@ -8,7 +8,7 @@ from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
 from .models import AuthAccount, Salon, User
@@ -51,6 +51,126 @@ def list_salons() -> tuple[dict[str, list[dict[str, object]]], int]:
 
     payload = {"salons": [salon.to_dict() for salon in salons]}
     return jsonify(payload), 200
+
+
+@bp.post("/salons")
+def create_salon() -> tuple[dict[str, object], int]:
+    """Create a new salon entry (restricted to authenticated vendors)."""
+    payload = request.get_json(silent=True) or {}
+
+    # Extract required and optional fields
+    name = (payload.get("name") or "").strip()
+    vendor_id = payload.get("vendor_id")
+    address_line1 = (payload.get("address_line1") or "").strip() or None
+    address_line2 = (payload.get("address_line2") or "").strip() or None
+    city = (payload.get("city") or "").strip() or None
+    state = (payload.get("state") or "").strip() or None
+    postal_code = (payload.get("postal_code") or "").strip() or None
+    phone = (payload.get("phone") or "").strip() or None
+
+    # Basic validation
+    if not name or not vendor_id:
+        return (
+            jsonify({
+                "error": "invalid_payload",
+                "message": "name and vendor_id are required"
+            }),
+            400,
+        )
+
+    # Check vendor existence and role
+    vendor = User.query.get(vendor_id)
+    if not vendor or vendor.role != "vendor":
+        return (
+            jsonify({
+                "error": "invalid_vendor",
+                "message": "vendor_id must correspond to a valid vendor account"
+            }),
+            400,
+        )
+
+    try:
+        # Create salon (verification_status defaults to 'pending')
+        new_salon = Salon(
+            name=name,
+            vendor_id=vendor_id,
+            address_line1=address_line1,
+            address_line2=address_line2,
+            city=city,
+            state=state,
+            postal_code=postal_code,
+            phone=phone,
+            is_published=False,  # not published until admin approves
+            verification_status="pending",
+        )
+
+        db.session.add(new_salon)
+        db.session.commit()
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create new salon", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    return jsonify({"salon": new_salon.to_dict()}), 201
+
+
+@bp.post("/auth/register")
+def register_user() -> tuple[dict[str, object], int]:
+    """Register a new client or vendor user."""
+    payload = request.get_json(silent=True) or {}
+
+    # Extract and validate required fields
+    name = (payload.get("name") or "").strip()
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    role = (payload.get("role") or "client").strip().lower()
+    phone = (payload.get("phone") or "").strip() or None  # Handle empty string
+
+    if not name or not email or not password:
+        return (
+            jsonify({"error": "invalid_payload", "message": "name, email, and password are required"}),
+            400,
+        )
+
+    # Security: Only allow 'client' or 'vendor' registration via this public endpoint
+    if role not in ["client", "vendor"]:
+        return (
+            jsonify({"error": "invalid_role", "message": "role must be 'client' or 'vendor'"}),
+            400,
+        )
+
+    # Alternative Flow 1: Check if data is invalid (email already exists)
+    if User.query.filter_by(email=email).first():
+        return (
+            jsonify({"error": "conflict", "message": "email address is already in use"}),
+            409,  # 409 Conflict is more specific than 400
+        )
+
+    # Ideal Flow: Create user and auth account
+    try:
+        password_hash = generate_password_hash(password)
+
+        # Create the User
+        new_user = User(name=name, email=email, role=role, phone=phone)
+        db.session.add(new_user)
+        db.session.flush()  # Get the new user_id before creating the AuthAccount
+
+        # Create the associated AuthAccount
+        new_account = AuthAccount(user_id=new_user.user_id, password_hash=password_hash)
+        db.session.add(new_account)
+
+        db.session.commit()
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to register new user", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    # Ideal Flow (Step 5): Return confirmation and log user in by issuing a token
+    token = _build_token({"user_id": new_user.user_id, "role": new_user.role})
+
+    return jsonify({"token": token, "user": new_user.to_dict_basic()}), 201  # 201 Created
 
 
 @bp.get("/users/verify")
