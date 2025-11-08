@@ -4994,3 +4994,302 @@ def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch customer statistics", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 1.17 - Manage Service Images
+# ============================================================================
+
+@bp.post("/appointments/<int:appointment_id>/images")
+def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Upload an image for an appointment (before/after service) (UC 1.17)."""
+    try:
+        from .models import Appointment
+        import os
+        import uuid
+        from datetime import datetime
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon or client owns the appointment
+        if appointment.salon and appointment.salon.vendor_id != vendor_id and appointment.client_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Check for file in request
+        if 'image' not in request.files:
+            return jsonify({"error": "no_file_provided"}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({"error": "no_file_selected"}), 400
+        
+        # Validate file type
+        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+        if not ('.' in file.filename and file.filename.rsplit('.', 1)[1].lower() in allowed_extensions):
+            return jsonify({"error": "invalid_file_type"}), 400
+        
+        # Create uploads directory if it doesn't exist
+        upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'uploads', 'appointment_images')
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Generate unique filename
+        file_extension = file.filename.rsplit('.', 1)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}_{datetime.utcnow().timestamp()}.{file_extension}"
+        filepath = os.path.join(upload_dir, unique_filename)
+        
+        # Save file
+        file.save(filepath)
+        
+        # Store image metadata in appointment
+        image_type = request.form.get('type', 'other')  # 'before', 'after', 'other'
+        image_description = request.form.get('description', '')
+        
+        if not appointment.image_data:
+            appointment.image_data = {}
+        
+        if 'images' not in appointment.image_data:
+            appointment.image_data['images'] = []
+        
+        appointment.image_data['images'].append({
+            'id': uuid.uuid4().hex,
+            'filename': unique_filename,
+            'type': image_type,
+            'description': image_description,
+            'uploaded_at': datetime.utcnow().isoformat(),
+            'uploader_id': vendor_id
+        })
+        
+        db.session.commit()
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "image_id": appointment.image_data['images'][-1]['id'],
+            "filename": unique_filename,
+            "type": image_type,
+            "description": image_description,
+            "uploaded_at": appointment.image_data['images'][-1]['uploaded_at']
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to upload appointment image", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error uploading image", exc_info=exc)
+        return jsonify({"error": "upload_failed"}), 500
+
+
+@bp.get("/appointments/<int:appointment_id>/images")
+def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Get all images for an appointment (UC 1.17)."""
+    try:
+        from .models import Appointment
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify access (vendor owns salon or client owns appointment)
+        if appointment.salon and appointment.salon.vendor_id != user_id and appointment.client_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        images = appointment.image_data.get('images', []) if appointment.image_data else []
+        
+        # Group images by type
+        images_by_type = {
+            'before': [img for img in images if img.get('type') == 'before'],
+            'after': [img for img in images if img.get('type') == 'after'],
+            'other': [img for img in images if img.get('type') == 'other']
+        }
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "total_images": len(images),
+            "images": images,
+            "images_by_type": images_by_type
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment images", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/appointments/<int:appointment_id>/images/<string:image_id>")
+def delete_appointment_image(appointment_id: int, image_id: str) -> tuple[dict[str, object], int]:
+    """Delete an image from an appointment (UC 1.17)."""
+    try:
+        from .models import Appointment
+        import os
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify access - only vendor or uploader can delete
+        images = appointment.image_data.get('images', []) if appointment.image_data else []
+        image_to_delete = None
+        
+        for img in images:
+            if img['id'] == image_id:
+                image_to_delete = img
+                break
+        
+        if not image_to_delete:
+            return jsonify({"error": "image_not_found"}), 404
+        
+        # Verify authorization
+        if appointment.salon and appointment.salon.vendor_id != user_id and image_to_delete.get('uploader_id') != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Remove from database
+        images = [img for img in images if img['id'] != image_id]
+        appointment.image_data['images'] = images
+        
+        # Delete file from storage
+        try:
+            upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'uploads', 'appointment_images')
+            filepath = os.path.join(upload_dir, image_to_delete['filename'])
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception as e:
+            current_app.logger.warning(f"Failed to delete image file: {e}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "image_id": image_id,
+            "deleted": True
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to delete appointment image", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error deleting image", exc_info=exc)
+        return jsonify({"error": "delete_failed"}), 500
+
+
+@bp.get("/services/<int:service_id>/images")
+def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
+    """Get all before/after images for a service (UC 1.17)."""
+    try:
+        from .models import Service, Appointment
+        
+        # Get service
+        service = Service.query.get(service_id)
+        if not service:
+            return jsonify({"error": "service_not_found"}), 404
+        
+        # Get all appointments with this service that have images
+        appointments = Appointment.query.filter(
+            Appointment.service_id == service_id,
+            Appointment.status == "completed"
+        ).all()
+        
+        # Collect all images
+        all_images = []
+        for apt in appointments:
+            if apt.image_data and 'images' in apt.image_data:
+                for img in apt.image_data['images']:
+                    img_with_apt = dict(img)
+                    img_with_apt['appointment_id'] = apt.appointment_id
+                    img_with_apt['client_name'] = apt.client.name if apt.client else "Unknown"
+                    img_with_apt['appointment_date'] = apt.created_at.isoformat()
+                    all_images.append(img_with_apt)
+        
+        # Group by type
+        images_by_type = {
+            'before': [img for img in all_images if img.get('type') == 'before'],
+            'after': [img for img in all_images if img.get('type') == 'after'],
+            'other': [img for img in all_images if img.get('type') == 'other']
+        }
+        
+        return jsonify({
+            "service_id": service_id,
+            "service_name": service.name,
+            "total_images": len(all_images),
+            "images": all_images,
+            "images_by_type": images_by_type
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch service images", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/appointments/<int:appointment_id>/images/<string:image_id>")
+def update_appointment_image_metadata(appointment_id: int, image_id: str) -> tuple[dict[str, object], int]:
+    """Update image metadata (description, type) (UC 1.17)."""
+    try:
+        from .models import Appointment
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get current user
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify access
+        if appointment.salon and appointment.salon.vendor_id != user_id and appointment.client_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Find and update image
+        images = appointment.image_data.get('images', []) if appointment.image_data else []
+        image_found = False
+        
+        for img in images:
+            if img['id'] == image_id:
+                data = request.get_json()
+                if 'description' in data:
+                    img['description'] = data['description']
+                if 'type' in data:
+                    img['type'] = data['type']
+                image_found = True
+                break
+        
+        if not image_found:
+            return jsonify({"error": "image_not_found"}), 404
+        
+        appointment.image_data['images'] = images
+        db.session.commit()
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "image_id": image_id,
+            "updated": True
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to update image metadata", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error updating image metadata", exc_info=exc)
+        return jsonify({"error": "update_failed"}), 500
