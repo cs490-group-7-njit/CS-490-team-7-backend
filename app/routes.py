@@ -208,6 +208,9 @@ def submit_for_verification(salon_id: int):
     }), 200
 
 
+# --- BEGIN: Client Use Case 2.1 ---
+
+
 @bp.post("/auth/register")
 def register_user() -> tuple[dict[str, object], int]:
     """Register a new client or vendor user."""
@@ -265,6 +268,8 @@ def register_user() -> tuple[dict[str, object], int]:
 
     return jsonify({"token": token, "user": new_user.to_dict_basic()}), 201  # 201 Created
 
+
+# --- END: Client Use Case 2.1 ---
 
 @bp.get("/users/verify")
 def verify_user() -> tuple[dict[str, object], int]:
