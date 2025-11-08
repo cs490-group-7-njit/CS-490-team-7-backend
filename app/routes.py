@@ -1517,9 +1517,13 @@ def list_salon_appointments(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/appointments/<int:appointment_id>/status")
 def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Update appointment status (vendor can change booked→completed, no-show, etc)."""
+    """Update appointment status (vendor can change booked→completed, no-show, etc).
+    
+    When appointment is marked as 'completed', automatically award loyalty points
+    to the client based on the service cost (1 point per dollar).
+    """
     try:
-        from .models import Appointment
+        from .models import Appointment, ClientLoyalty
 
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -1566,6 +1570,29 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 ),
                 400,
             )
+
+        # UC 2.11: Award loyalty points when appointment is completed
+        if appointment.status != "completed" and new_status == "completed":
+            # Calculate points (1 point per dollar of service cost)
+            points_earned = int(appointment.service.price_cents / 100) if appointment.service and appointment.service.price_cents else 0
+            
+            if points_earned > 0:
+                # Get or create loyalty record for this client-salon combination
+                loyalty = ClientLoyalty.query.filter_by(
+                    client_id=appointment.client_id,
+                    salon_id=appointment.salon_id
+                ).first()
+                
+                if loyalty:
+                    loyalty.points_balance += points_earned
+                else:
+                    # Create new loyalty record for this client at this salon
+                    loyalty = ClientLoyalty(
+                        client_id=appointment.client_id,
+                        salon_id=appointment.salon_id,
+                        points_balance=points_earned
+                    )
+                    db.session.add(loyalty)
 
         appointment.status = new_status
         db.session.commit()
