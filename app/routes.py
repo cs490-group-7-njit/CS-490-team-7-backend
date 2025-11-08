@@ -5293,3 +5293,378 @@ def update_appointment_image_metadata(appointment_id: int, image_id: str) -> tup
     except Exception as exc:
         current_app.logger.exception("Error updating image metadata", exc_info=exc)
         return jsonify({"error": "update_failed"}), 500
+
+
+# ============================================================================
+# UC 1.18 - Send Promotions
+# ============================================================================
+
+@bp.post("/salons/<int:salon_id>/promotions")
+def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
+    """Create a new promotional offer for a salon (UC 1.18)."""
+    try:
+        from .models import Salon, Promotion
+        from datetime import datetime, timedelta
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get request data
+        data = request.get_json()
+        
+        # Validate required fields
+        if not data.get('title') or not data.get('description'):
+            return jsonify({"error": "missing_fields"}), 400
+        
+        # Create promotion
+        promotion = {
+            'id': uuid.uuid4().hex,
+            'title': data.get('title'),
+            'description': data.get('description'),
+            'discount_type': data.get('discount_type', 'percentage'),  # 'percentage' or 'fixed'
+            'discount_value': data.get('discount_value', 0),
+            'min_purchase': data.get('min_purchase', 0),
+            'promo_code': data.get('promo_code', f"PROMO{uuid.uuid4().hex[:8].upper()}"),
+            'start_date': data.get('start_date'),
+            'end_date': data.get('end_date'),
+            'target_segment': data.get('target_segment', 'all'),  # 'all', 'loyal', 'repeat', 'onetime'
+            'max_uses': data.get('max_uses', -1),  # -1 for unlimited
+            'current_uses': 0,
+            'created_at': datetime.utcnow().isoformat(),
+            'status': 'active'
+        }
+        
+        if not salon.promotion_data:
+            salon.promotion_data = {}
+        
+        if 'promotions' not in salon.promotion_data:
+            salon.promotion_data['promotions'] = []
+        
+        salon.promotion_data['promotions'].append(promotion)
+        db.session.commit()
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "promotion": promotion
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to create promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error creating promotion", exc_info=exc)
+        return jsonify({"error": "creation_failed"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/promotions")
+def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all promotions for a salon (UC 1.18)."""
+    try:
+        from .models import Salon
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        promotions = salon.promotion_data.get('promotions', []) if salon.promotion_data else []
+        
+        # Filter by status if provided
+        status = request.args.get('status')
+        if status:
+            promotions = [p for p in promotions if p.get('status') == status]
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_promotions": len(promotions),
+            "promotions": promotions
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch promotions", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/promotions/<string:promotion_id>")
+def update_promotion(salon_id: int, promotion_id: str) -> tuple[dict[str, object], int]:
+    """Update a promotion (UC 1.18)."""
+    try:
+        from .models import Salon
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Find and update promotion
+        promotions = salon.promotion_data.get('promotions', []) if salon.promotion_data else []
+        promotion_found = False
+        
+        data = request.get_json()
+        
+        for promo in promotions:
+            if promo['id'] == promotion_id:
+                # Update allowed fields
+                if 'title' in data:
+                    promo['title'] = data['title']
+                if 'description' in data:
+                    promo['description'] = data['description']
+                if 'discount_value' in data:
+                    promo['discount_value'] = data['discount_value']
+                if 'status' in data:
+                    promo['status'] = data['status']
+                if 'end_date' in data:
+                    promo['end_date'] = data['end_date']
+                promotion_found = True
+                break
+        
+        if not promotion_found:
+            return jsonify({"error": "promotion_not_found"}), 404
+        
+        salon.promotion_data['promotions'] = promotions
+        db.session.commit()
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "promotion_id": promotion_id,
+            "updated": True
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to update promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error updating promotion", exc_info=exc)
+        return jsonify({"error": "update_failed"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/promotions/<string:promotion_id>")
+def delete_promotion(salon_id: int, promotion_id: str) -> tuple[dict[str, object], int]:
+    """Delete a promotion (UC 1.18)."""
+    try:
+        from .models import Salon
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Remove promotion
+        promotions = salon.promotion_data.get('promotions', []) if salon.promotion_data else []
+        original_count = len(promotions)
+        promotions = [p for p in promotions if p['id'] != promotion_id]
+        
+        if len(promotions) == original_count:
+            return jsonify({"error": "promotion_not_found"}), 404
+        
+        salon.promotion_data['promotions'] = promotions
+        db.session.commit()
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "promotion_id": promotion_id,
+            "deleted": True
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to delete promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.post("/salons/<int:salon_id>/promotions/<string:promotion_id>/send")
+def send_promotion(salon_id: int, promotion_id: str) -> tuple[dict[str, object], int]:
+    """Send a promotion to targeted customers (UC 1.18)."""
+    try:
+        from .models import Salon, Appointment, Notification
+        from datetime import datetime
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Find promotion
+        promotions = salon.promotion_data.get('promotions', []) if salon.promotion_data else []
+        promotion = None
+        for p in promotions:
+            if p['id'] == promotion_id:
+                promotion = p
+                break
+        
+        if not promotion:
+            return jsonify({"error": "promotion_not_found"}), 404
+        
+        # Get target customers based on segment
+        target_segment = promotion.get('target_segment', 'all')
+        target_customers = set()
+        
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status.in_(["completed", "no-show"])
+        ).all()
+        
+        # Build customer visit counts
+        visit_counts = {}
+        for apt in appointments:
+            client_id = apt.client_id
+            if client_id not in visit_counts:
+                visit_counts[client_id] = 0
+            visit_counts[client_id] += 1
+        
+        # Filter by segment
+        if target_segment == 'loyal':
+            target_customers = {cid for cid, count in visit_counts.items() if count >= 5}
+        elif target_segment == 'repeat':
+            target_customers = {cid for cid, count in visit_counts.items() if 2 <= count < 5}
+        elif target_segment == 'onetime':
+            target_customers = {cid for cid, count in visit_counts.items() if count == 1}
+        else:  # 'all'
+            target_customers = set(visit_counts.keys())
+        
+        # Send notifications to target customers
+        sent_count = 0
+        for client_id in target_customers:
+            notification = Notification(
+                user_id=client_id,
+                title=f"Special Offer: {promotion['title']}",
+                message=promotion['description'],
+                notification_type="promotion",
+                related_id=promotion_id,
+                is_read=False,
+                created_at=datetime.utcnow()
+            )
+            db.session.add(notification)
+            sent_count += 1
+        
+        # Track promotion send
+        if 'send_history' not in salon.promotion_data:
+            salon.promotion_data['send_history'] = []
+        
+        salon.promotion_data['send_history'].append({
+            'promotion_id': promotion_id,
+            'sent_at': datetime.utcnow().isoformat(),
+            'target_segment': target_segment,
+            'recipients_count': sent_count
+        })
+        
+        db.session.commit()
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "promotion_id": promotion_id,
+            "target_segment": target_segment,
+            "recipients_count": sent_count,
+            "sent": True
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to send promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Error sending promotion", exc_info=exc)
+        return jsonify({"error": "send_failed"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/promotions/stats")
+def get_promotion_stats(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get promotion statistics for a salon (UC 1.18)."""
+    try:
+        from .models import Salon
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        promotions = salon.promotion_data.get('promotions', []) if salon.promotion_data else []
+        send_history = salon.promotion_data.get('send_history', []) if salon.promotion_data else []
+        
+        total_promotions = len(promotions)
+        active_promotions = len([p for p in promotions if p.get('status') == 'active'])
+        total_sent = len(send_history)
+        total_recipients = sum(h.get('recipients_count', 0) for h in send_history)
+        
+        # Calculate conversion metrics (mock data as we don't have full tracking yet)
+        promotions_by_segment = {}
+        for promo in promotions:
+            segment = promo.get('target_segment', 'all')
+            if segment not in promotions_by_segment:
+                promotions_by_segment[segment] = 0
+            promotions_by_segment[segment] += 1
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_promotions": total_promotions,
+            "active_promotions": active_promotions,
+            "inactive_promotions": total_promotions - active_promotions,
+            "total_send_campaigns": total_sent,
+            "total_recipients_targeted": total_recipients,
+            "average_recipients_per_campaign": round(total_recipients / total_sent, 0) if total_sent > 0 else 0,
+            "promotions_by_segment": promotions_by_segment
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch promotion stats", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
