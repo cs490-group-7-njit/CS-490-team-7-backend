@@ -4743,3 +4743,254 @@ def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, obje
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch payments for date", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 1.16 - View Customer History
+# ============================================================================
+
+@bp.get("/salons/<int:salon_id>/customers")
+def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all customers and their visit history for a salon (UC 1.16)."""
+    try:
+        from .models import Salon, Appointment, User as UserModel
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get all completed appointments for this salon
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status.in_(["completed", "no-show"])
+        ).order_by(Appointment.created_at.desc()).all()
+        
+        # Group appointments by customer
+        customer_map = {}
+        for apt in appointments:
+            client_id = apt.client_id
+            if client_id not in customer_map:
+                customer_map[client_id] = {
+                    "client_id": apt.client_id,
+                    "client_name": apt.client.name if apt.client else "Unknown",
+                    "client_phone": apt.client.phone if apt.client else None,
+                    "client_email": apt.client.email if apt.client else None,
+                    "visit_count": 0,
+                    "completed_visits": 0,
+                    "total_spent_cents": 0,
+                    "last_visit": None,
+                    "first_visit": None,
+                    "appointments": []
+                }
+            
+            customer_map[client_id]["visit_count"] += 1
+            if apt.status == "completed":
+                customer_map[client_id]["completed_visits"] += 1
+                service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+                customer_map[client_id]["total_spent_cents"] += service_price
+            
+            if customer_map[client_id]["last_visit"] is None:
+                customer_map[client_id]["last_visit"] = apt.created_at.isoformat()
+            
+            customer_map[client_id]["first_visit"] = apt.created_at.isoformat()
+            
+            customer_map[client_id]["appointments"].append({
+                "appointment_id": apt.appointment_id,
+                "service": apt.service.name if apt.service else "Unknown",
+                "staff": apt.staff.name if apt.staff else "Unknown",
+                "date": apt.created_at.isoformat(),
+                "status": apt.status,
+                "amount": apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            })
+        
+        # Convert to list and add computed fields
+        customers = []
+        for client_id, data in customer_map.items():
+            data["total_spent_dollars"] = data["total_spent_cents"] / 100.0
+            data["average_visit_value"] = data["total_spent_cents"] / data["completed_visits"] if data["completed_visits"] > 0 else 0
+            data["average_visit_value_dollars"] = data["average_visit_value"] / 100.0
+            customers.append(data)
+        
+        # Sort by visit count (most frequent first)
+        customers.sort(key=lambda x: x["visit_count"], reverse=True)
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "total_customers": len(customers),
+            "customers": customers
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon customers", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/customers/<int:client_id>/history")
+def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str, object], int]:
+    """Get detailed visit history for a specific customer at a salon (UC 1.16)."""
+    try:
+        from .models import Salon, Appointment, User as UserModel
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get all appointments for this customer at this salon
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.client_id == client_id,
+            Appointment.status.in_(["completed", "no-show", "cancelled"])
+        ).order_by(Appointment.created_at.desc()).all()
+        
+        if not appointments and not User.query.get(client_id):
+            return jsonify({"error": "customer_not_found"}), 404
+        
+        # Get customer info
+        client = User.query.get(client_id)
+        customer_info = {
+            "client_id": client_id,
+            "client_name": client.name if client else "Unknown",
+            "client_phone": client.phone if client else None,
+            "client_email": client.email if client else None,
+            "join_date": client.created_at.isoformat() if client else None
+        }
+        
+        # Build visit history
+        history = []
+        total_spent = 0
+        completed_count = 0
+        
+        for apt in appointments:
+            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            if apt.status == "completed":
+                total_spent += service_price
+                completed_count += 1
+            
+            history.append({
+                "appointment_id": apt.appointment_id,
+                "date": apt.created_at.isoformat(),
+                "service": apt.service.name if apt.service else "Unknown",
+                "service_id": apt.service_id,
+                "staff": apt.staff.name if apt.staff else "Unknown",
+                "staff_id": apt.staff_id,
+                "duration_minutes": apt.duration if apt.duration else 0,
+                "status": apt.status,
+                "amount_cents": service_price,
+                "amount_dollars": service_price / 100.0,
+                "notes": apt.notes if apt.notes else ""
+            })
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "customer": customer_info,
+            "total_visits": len(appointments),
+            "completed_visits": completed_count,
+            "total_spent_cents": total_spent,
+            "total_spent_dollars": total_spent / 100.0,
+            "average_visit_value": total_spent / completed_count if completed_count > 0 else 0,
+            "average_visit_value_dollars": (total_spent / completed_count / 100.0) if completed_count > 0 else 0,
+            "history": history
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch customer visit history", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/customers/stats")
+def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get customer statistics for a salon (UC 1.16)."""
+    try:
+        from .models import Salon, Appointment
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get all appointments
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status.in_(["completed", "no-show"])
+        ).all()
+        
+        # Calculate statistics
+        unique_customers = set()
+        total_visits = 0
+        total_revenue = 0
+        visits_by_customer = {}
+        
+        for apt in appointments:
+            client_id = apt.client_id
+            unique_customers.add(client_id)
+            total_visits += 1
+            
+            if apt.status == "completed":
+                service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+                total_revenue += service_price
+            
+            if client_id not in visits_by_customer:
+                visits_by_customer[client_id] = 0
+            visits_by_customer[client_id] += 1
+        
+        # Calculate customer segments
+        repeat_customers = sum(1 for count in visits_by_customer.values() if count > 1)
+        one_time_customers = sum(1 for count in visits_by_customer.values() if count == 1)
+        loyal_customers = sum(1 for count in visits_by_customer.values() if count >= 5)
+        
+        # Visit distribution
+        avg_visits_per_customer = total_visits / len(unique_customers) if unique_customers else 0
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "total_unique_customers": len(unique_customers),
+            "total_visits": total_visits,
+            "total_revenue_cents": total_revenue,
+            "total_revenue_dollars": total_revenue / 100.0,
+            "average_visits_per_customer": round(avg_visits_per_customer, 2),
+            "repeat_customers": repeat_customers,
+            "one_time_customers": one_time_customers,
+            "loyal_customers": loyal_customers,
+            "repeat_customer_percentage": round((repeat_customers / len(unique_customers) * 100), 2) if unique_customers else 0,
+            "average_revenue_per_visit": round(total_revenue / total_visits, 0) if total_visits > 0 else 0,
+            "average_revenue_per_visit_dollars": (total_revenue / total_visits / 100.0) if total_visits > 0 else 0
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch customer statistics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
