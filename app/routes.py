@@ -179,6 +179,35 @@ def update_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
     }), 200
 
 
+@bp.put("/salons/<int:salon_id>/verify")
+def submit_for_verification(salon_id: int):
+    """Vendor submits their salon for verification."""
+    payload = request.get_json(silent=True) or {}
+    business_tin = (payload.get("business_tin") or "").strip()
+
+    if not business_tin:
+        return jsonify({"error": "invalid_payload", "message": "business_tin is required"}), 400
+
+    salon = Salon.query.get(salon_id)
+    if not salon:
+        return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+    # In production: ensure current user matches salon.vendor_id
+    try:
+        salon.business_tin = business_tin
+        salon.verification_status = "pending"
+        db.session.commit()
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to submit for verification", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    return jsonify({
+        "message": "Verification request submitted successfully.",
+        "salon": salon.to_dict(),
+    }), 200
+
+
 @bp.post("/auth/register")
 def register_user() -> tuple[dict[str, object], int]:
     """Register a new client or vendor user."""
