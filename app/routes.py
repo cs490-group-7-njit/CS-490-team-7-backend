@@ -4517,3 +4517,229 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch time blocks for date", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 1.15 - Track Payments
+# ============================================================================
+
+@bp.get("/salons/<int:salon_id>/payments")
+def get_salon_payments(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all payments for a salon (UC 1.15)."""
+    try:
+        from .models import Salon, Appointment, User as UserModel
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get payments (appointments with status completed or no-show that were charged)
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status.in_(["completed", "no-show"])
+        ).order_by(Appointment.created_at.desc()).all()
+        
+        # Calculate payment info
+        payments = []
+        total_revenue = 0
+        
+        for apt in appointments:
+            # Get service price (default 50 if not available)
+            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000  # in cents
+            
+            # Create payment record
+            payment = {
+                "id": apt.appointment_id,
+                "appointment_id": apt.appointment_id,
+                "client_id": apt.client_id,
+                "client_name": apt.client.name if apt.client else "Unknown",
+                "service_id": apt.service_id,
+                "service_name": apt.service.name if apt.service else "Unknown",
+                "amount_cents": service_price,
+                "amount_dollars": service_price / 100.0,
+                "status": apt.status,
+                "date": apt.created_at.isoformat(),
+                "appointment_time": apt.starts_at.isoformat() if apt.starts_at else None
+            }
+            payments.append(payment)
+            if apt.status == "completed":
+                total_revenue += service_price
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "payments": payments,
+            "total_revenue_cents": total_revenue,
+            "total_revenue_dollars": total_revenue / 100.0,
+            "total_transactions": len(payments),
+            "completed_transactions": sum(1 for p in payments if p["status"] == "completed")
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon payments", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/payments/stats")
+def get_salon_payment_stats(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get payment statistics for a salon (UC 1.15)."""
+    try:
+        from datetime import datetime, timedelta
+        from .models import Salon, Appointment
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get date range (last 30 days by default)
+        days_back = 30
+        start_date = datetime.utcnow() - timedelta(days=days_back)
+        
+        # Get completed appointments in time range
+        completed_apts = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status == "completed",
+            Appointment.created_at >= start_date
+        ).all()
+        
+        # Calculate stats
+        total_revenue = 0
+        revenue_by_day = {}
+        revenue_by_service = {}
+        
+        for apt in completed_apts:
+            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            total_revenue += service_price
+            
+            # Group by day
+            day_key = apt.created_at.date().isoformat()
+            if day_key not in revenue_by_day:
+                revenue_by_day[day_key] = 0
+            revenue_by_day[day_key] += service_price
+            
+            # Group by service
+            service_name = apt.service.name if apt.service else "Unknown"
+            if service_name not in revenue_by_service:
+                revenue_by_service[service_name] = {"count": 0, "revenue": 0}
+            revenue_by_service[service_name]["count"] += 1
+            revenue_by_service[service_name]["revenue"] += service_price
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "period_days": days_back,
+            "total_revenue_cents": total_revenue,
+            "total_revenue_dollars": total_revenue / 100.0,
+            "total_completed": len(completed_apts),
+            "average_transaction_cents": total_revenue // len(completed_apts) if completed_apts else 0,
+            "average_transaction_dollars": (total_revenue / len(completed_apts) / 100.0) if completed_apts else 0,
+            "revenue_by_day": {k: v for k, v in sorted(revenue_by_day.items())},
+            "revenue_by_service": {
+                service: {
+                    "count": data["count"],
+                    "revenue_cents": data["revenue"],
+                    "revenue_dollars": data["revenue"] / 100.0
+                }
+                for service, data in revenue_by_service.items()
+            }
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch payment stats", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/payments/<string:date>")
+def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, object], int]:
+    """Get payments for a specific date (UC 1.15)."""
+    try:
+        from datetime import datetime
+        from .models import Salon, Appointment
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Parse date
+        try:
+            target_date = datetime.fromisoformat(date)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Get start and end of day
+        day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get completed appointments for this day
+        appointments = Appointment.query.filter(
+            Appointment.salon_id == salon_id,
+            Appointment.status == "completed",
+            Appointment.created_at >= day_start,
+            Appointment.created_at <= day_end
+        ).order_by(Appointment.created_at).all()
+        
+        # Calculate daily revenue
+        payments = []
+        daily_total = 0
+        
+        for apt in appointments:
+            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            
+            payment = {
+                "id": apt.appointment_id,
+                "appointment_id": apt.appointment_id,
+                "client_name": apt.client.name if apt.client else "Unknown",
+                "service_name": apt.service.name if apt.service else "Unknown",
+                "amount_cents": service_price,
+                "amount_dollars": service_price / 100.0,
+                "time": apt.starts_at.isoformat() if apt.starts_at else None
+            }
+            payments.append(payment)
+            daily_total += service_price
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "salon_name": salon.name,
+            "date": date,
+            "payments": payments,
+            "daily_total_cents": daily_total,
+            "daily_total_dollars": daily_total / 100.0,
+            "transaction_count": len(payments)
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch payments for date", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
