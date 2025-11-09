@@ -102,6 +102,8 @@ class Salon(db.Model):
     )
     # UC 1.19: Delay notifications data
     delay_notifications_data = db.Column(db.JSON, nullable=True, default=dict)
+    # UC 1.22: Social media links data
+    social_media_data = db.Column(db.JSON, nullable=True, default=dict)
 
     vendor = db.relationship("User", back_populates="salons")
 

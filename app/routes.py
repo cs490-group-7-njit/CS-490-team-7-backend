@@ -5954,3 +5954,257 @@ def get_delay_analytics(salon_id: int) -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch delay analytics", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# UC 1.22: Manage Barbers Social Media Links
+@bp.post("/salons/<int:salon_id>/social-media")
+def add_social_media_link(salon_id: int) -> tuple[dict[str, object], int]:
+    """Add a social media link for a salon (UC 1.22)."""
+    try:
+        import uuid
+        from datetime import datetime, timezone
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get request data
+        data = request.get_json()
+        platform = data.get('platform')
+        url = data.get('url')
+        
+        # Validate input
+        if not platform or not url:
+            return jsonify({"error": "missing_required_fields"}), 400
+        
+        valid_platforms = ['instagram', 'facebook', 'twitter', 'tiktok', 'youtube', 'linkedin', 'pinterest', 'snapchat', 'telegram', 'whatsapp']
+        if platform.lower() not in valid_platforms:
+            return jsonify({"error": "invalid_platform"}), 400
+        
+        if len(url) < 5 or len(url) > 500:
+            return jsonify({"error": "invalid_url"}), 400
+        
+        # Create social media data structure if not exists
+        if not salon.social_media_data:
+            salon.social_media_data = {}
+        
+        if 'links' not in salon.social_media_data:
+            salon.social_media_data['links'] = []
+        
+        # Check if platform already exists
+        for link in salon.social_media_data['links']:
+            if link.get('platform') == platform.lower():
+                return jsonify({"error": "platform_already_exists"}), 400
+        
+        # Create social media link
+        link_id = str(uuid.uuid4())
+        social_media_link = {
+            'id': link_id,
+            'platform': platform.lower(),
+            'url': url,
+            'display_name': data.get('display_name', platform.capitalize()),
+            'is_visible': data.get('is_visible', True),
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        salon.social_media_data['links'].append(social_media_link)
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "link_id": link_id,
+            "platform": platform.lower(),
+            "url": url,
+            "message": "Social media link added successfully"
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to add social media link", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception("Unexpected error adding social media link", exc_info=exc)
+        return jsonify({"error": "internal_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/social-media")
+def get_salon_social_media(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all social media links for a salon (UC 1.22)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        links = salon.social_media_data.get('links', []) if salon.social_media_data else []
+        
+        # Filter visible links for public view
+        visible_links = [l for l in links if l.get('is_visible', True)]
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_links": len(visible_links),
+            "social_media": visible_links
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch social media links", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/social-media/all")
+def get_salon_social_media_all(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all social media links for a salon including hidden ones (vendor only) (UC 1.22)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        links = salon.social_media_data.get('links', []) if salon.social_media_data else []
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_links": len(links),
+            "social_media": links
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch social media links", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/social-media/<link_id>")
+def update_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, object], int]:
+    """Update a social media link (UC 1.22)."""
+    try:
+        from datetime import datetime, timezone
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get request data
+        data = request.get_json()
+        
+        # Find link
+        links = salon.social_media_data.get('links', []) if salon.social_media_data else []
+        link = None
+        for l in links:
+            if l.get('id') == link_id:
+                link = l
+                break
+        
+        if not link:
+            return jsonify({"error": "link_not_found"}), 404
+        
+        # Update fields
+        if 'url' in data:
+            if len(data['url']) < 5 or len(data['url']) > 500:
+                return jsonify({"error": "invalid_url"}), 400
+            link['url'] = data['url']
+        
+        if 'display_name' in data:
+            link['display_name'] = data['display_name']
+        
+        if 'is_visible' in data:
+            link['is_visible'] = data['is_visible']
+        
+        link['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "link_id": link_id,
+            "message": "Social media link updated successfully"
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update social media link", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception("Unexpected error updating social media link", exc_info=exc)
+        return jsonify({"error": "internal_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/social-media/<link_id>")
+def delete_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, object], int]:
+    """Delete a social media link (UC 1.22)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Find and delete link
+        links = salon.social_media_data.get('links', []) if salon.social_media_data else []
+        
+        link_found = False
+        for i, l in enumerate(links):
+            if l.get('id') == link_id:
+                links.pop(i)
+                link_found = True
+                break
+        
+        if not link_found:
+            return jsonify({"error": "link_not_found"}), 404
+        
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "link_id": link_id,
+            "message": "Social media link deleted successfully"
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete social media link", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
