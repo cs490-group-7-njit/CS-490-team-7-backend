@@ -100,6 +100,8 @@ class Salon(db.Model):
         default=utc_now,
         onupdate=utc_now,
     )
+    # UC 1.19: Delay notifications data
+    delay_notifications_data = db.Column(db.JSON, nullable=True, default=dict)
 
     vendor = db.relationship("User", back_populates="salons")
 
@@ -505,6 +507,7 @@ class Notification(db.Model):
             "appointment_cancelled",
             "appointment_rescheduled",
             "appointment_completed",
+            "appointment_delayed",
             "message_received",
             "discount_alert",
             "loyalty_points_earned",

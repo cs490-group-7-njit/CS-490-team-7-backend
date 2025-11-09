@@ -5668,3 +5668,289 @@ def get_promotion_stats(salon_id: int) -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch promotion stats", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# UC 1.19: Notify Clients of Delays
+@bp.post("/salons/<int:salon_id>/delays/notify")
+def notify_appointment_delay(salon_id: int) -> tuple[dict[str, object], int]:
+    """Notify clients that vendor is running late (UC 1.19)."""
+    try:
+        import uuid
+        from datetime import datetime, timezone, timedelta
+        
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get request data
+        data = request.get_json()
+        appointment_id = data.get('appointment_id')
+        delay_minutes = data.get('delay_minutes')
+        message = data.get('message')
+        
+        # Validate input
+        if not appointment_id or not delay_minutes:
+            return jsonify({"error": "missing_required_fields"}), 400
+        
+        if not isinstance(delay_minutes, (int, float)) or delay_minutes <= 0:
+            return jsonify({"error": "invalid_delay_minutes"}), 400
+        
+        if not message or len(message) < 1 or len(message) > 500:
+            return jsonify({"error": "invalid_message"}), 400
+        
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment or appointment.salon_id != salon_id:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Appointment must be booked or in progress
+        if appointment.status not in ['booked', 'in-progress']:
+            return jsonify({"error": "invalid_appointment_status"}), 400
+        
+        # Create delay notification record
+        if not salon.delay_notifications_data:
+            salon.delay_notifications_data = {}
+        
+        if 'notifications' not in salon.delay_notifications_data:
+            salon.delay_notifications_data['notifications'] = []
+        
+        delay_id = str(uuid.uuid4())
+        delay_notification = {
+            'id': delay_id,
+            'appointment_id': appointment_id,
+            'salon_id': salon_id,
+            'client_id': appointment.client_id,
+            'delay_minutes': delay_minutes,
+            'message': message,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'is_sent': True
+        }
+        
+        salon.delay_notifications_data['notifications'].append(delay_notification)
+        
+        # Create notification for client
+        notification = Notification(
+            user_id=appointment.client_id,
+            appointment_id=appointment_id,
+            title=f"Delay Alert from {salon.name}",
+            message=message,
+            notification_type='appointment_delayed'
+        )
+        db.session.add(notification)
+        
+        # Update appointment status if needed
+        if appointment.status == 'booked':
+            appointment.status = 'in-progress'
+        
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "delay_id": delay_id,
+            "appointment_id": appointment_id,
+            "client_id": appointment.client_id,
+            "delay_minutes": delay_minutes,
+            "notification_sent": True,
+            "message": "Delay notification sent successfully"
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to send delay notification", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception("Unexpected error sending delay notification", exc_info=exc)
+        return jsonify({"error": "internal_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/delays")
+def get_appointment_delays(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all delay notifications for a salon (UC 1.19)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get query parameters
+        filter_type = request.args.get('filter', 'all')  # all, pending, resolved
+        
+        delays = salon.delay_notifications_data.get('notifications', []) if salon.delay_notifications_data else []
+        
+        # Filter delays
+        if filter_type == 'pending':
+            delays = [d for d in delays if not d.get('is_resolved', False)]
+        elif filter_type == 'resolved':
+            delays = [d for d in delays if d.get('is_resolved', False)]
+        
+        # Sort by creation time (most recent first)
+        delays = sorted(delays, key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_delays": len(delays),
+            "delays": delays
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch delays", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/delays/<delay_id>/resolve")
+def resolve_appointment_delay(salon_id: int, delay_id: str) -> tuple[dict[str, object], int]:
+    """Mark a delay notification as resolved (UC 1.19)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Find and update delay
+        delays = salon.delay_notifications_data.get('notifications', []) if salon.delay_notifications_data else []
+        
+        delay = None
+        for d in delays:
+            if d.get('id') == delay_id:
+                delay = d
+                break
+        
+        if not delay:
+            return jsonify({"error": "delay_not_found"}), 404
+        
+        # Mark as resolved
+        delay['is_resolved'] = True
+        delay['resolved_at'] = datetime.now(timezone.utc).isoformat()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "delay_id": delay_id,
+            "message": "Delay marked as resolved"
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to resolve delay", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/appointments/<int:appointment_id>/delays")
+def get_appointment_delay_history(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Get delay notification history for an appointment (UC 1.19)."""
+    try:
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+        
+        # Get salon
+        salon = Salon.query.get(appointment.salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get delays for this appointment
+        delays = salon.delay_notifications_data.get('notifications', []) if salon.delay_notifications_data else []
+        appointment_delays = [d for d in delays if d.get('appointment_id') == appointment_id]
+        
+        # Sort by creation time (most recent first)
+        appointment_delays = sorted(appointment_delays, key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        # Calculate total delay minutes
+        total_delay = sum(d.get('delay_minutes', 0) for d in appointment_delays)
+        
+        return jsonify({
+            "appointment_id": appointment_id,
+            "salon_id": appointment.salon_id,
+            "client_id": appointment.client_id,
+            "total_delays": len(appointment_delays),
+            "total_delay_minutes": total_delay,
+            "delays": appointment_delays
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment delays", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/delays/analytics")
+def get_delay_analytics(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get delay analytics and metrics for a salon (UC 1.19)."""
+    try:
+        # Get salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get current user
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        delays = salon.delay_notifications_data.get('notifications', []) if salon.delay_notifications_data else []
+        
+        # Calculate metrics
+        total_delays = len(delays)
+        resolved_delays = len([d for d in delays if d.get('is_resolved', False)])
+        pending_delays = total_delays - resolved_delays
+        total_delay_minutes = sum(d.get('delay_minutes', 0) for d in delays)
+        average_delay_minutes = round(total_delay_minutes / total_delays, 1) if total_delays > 0 else 0
+        
+        # Get unique clients notified
+        clients_notified = len(set(d.get('client_id') for d in delays if d.get('client_id')))
+        
+        # Get unique appointments affected
+        appointments_affected = len(set(d.get('appointment_id') for d in delays if d.get('appointment_id')))
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "total_delays_sent": total_delays,
+            "resolved_delays": resolved_delays,
+            "pending_delays": pending_delays,
+            "total_delay_minutes": total_delay_minutes,
+            "average_delay_minutes": average_delay_minutes,
+            "clients_notified": clients_notified,
+            "appointments_affected": appointments_affected
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch delay analytics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
