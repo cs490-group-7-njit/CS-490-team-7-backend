@@ -2242,347 +2242,83 @@ def get_salon_analytics(salon_id: int) -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
-# ============================================================================
-# UC 2.16 - Rate Staff
-# ============================================================================
+# --- BEGIN: Admin Use Case - Manage Salons ---
 
-@bp.post("/staff/<int:staff_id>/rate")
-def rate_staff(staff_id: int) -> tuple[dict[str, object], int]:
-    """Create a new rating/review for a staff member (UC 2.16)."""
+@bp.put("/admin/salons/<int:salon_id>/verify")
+def verify_salon(salon_id: int) -> tuple[dict[str, object], int]:
+    """Verify a salon registration (admin only).
+    
+    Allows admin to approve or reject pending salon verifications.
+    When approved, sets salon to 'approved' status and makes it published.
+    When rejected, sets salon to 'rejected' status and keeps it unpublished.
+    """
     try:
-        from .models import StaffRating
-        
         payload = request.get_json(silent=True) or {}
+        action = (payload.get("action") or "").strip().lower()
+        admin_notes = (payload.get("admin_notes") or "").strip() or None
 
-        # Validate required fields
-        client_id = payload.get("client_id")
-        rating = payload.get("rating")
-        comment = (payload.get("comment") or "").strip() or None
+        # Validate action
+        if action not in ["approve", "reject"]:
+            return jsonify({
+                "error": "invalid_action",
+                "message": "action must be 'approve' or 'reject'"
+            }), 400
 
-        if not client_id or rating is None:
-            return (
-                jsonify({
-                    "error": "invalid_payload",
-                    "message": "client_id and rating are required"
-                }),
-                400,
+        # Find salon
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+
+        # Check if salon is in pending status
+        if salon.verification_status != "pending":
+            return jsonify({
+                "error": "invalid_status",
+                "message": f"Salon is already {salon.verification_status}"
+            }), 400
+
+        # Update salon based on action
+        if action == "approve":
+            salon.verification_status = "approved"
+            salon.is_published = True  # Make salon visible to public
+            salon.verified_at = datetime.now(timezone.utc)
+            salon.admin_notes = admin_notes
+            
+            # Create notification for vendor
+            notification = Notification(
+                user_id=salon.vendor_id,
+                title="Salon Approved",
+                message=f"Your salon '{salon.name}' has been approved and is now live on the platform!",
+                notification_type="salon_approved",
             )
-
-        # Validate rating range
-        if not isinstance(rating, int) or rating < 1 or rating > 5:
-            return (
-                jsonify({
-                    "error": "invalid_rating",
-                    "message": "Rating must be an integer between 1 and 5"
-                }),
-                400,
+            db.session.add(notification)
+            
+        elif action == "reject":
+            salon.verification_status = "rejected"
+            salon.is_published = False  # Keep salon hidden
+            salon.rejected_at = datetime.now(timezone.utc)
+            salon.admin_notes = admin_notes
+            
+            # Create notification for vendor
+            notification = Notification(
+                user_id=salon.vendor_id,
+                title="Salon Application Rejected",
+                message=f"Your salon application for '{salon.name}' has been rejected. Please contact support for more information.",
+                notification_type="salon_rejected",
             )
+            db.session.add(notification)
 
-        # Check if staff exists
-        staff = Staff.query.get(staff_id)
-        if not staff:
-            return jsonify({"error": "staff_not_found"}), 404
-
-        # Check if client exists
-        client = User.query.get(client_id)
-        if not client:
-            return jsonify({"error": "client_not_found"}), 404
-
-        # Create staff rating
-        staff_rating = StaffRating(
-            staff_id=staff_id,
-            client_id=client_id,
-            rating=rating,
-            comment=comment,
-        )
-
-        db.session.add(staff_rating)
         db.session.commit()
 
-        return jsonify({"staff_rating": staff_rating.to_dict()}), 201
-
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to create staff rating", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-@bp.get("/staff/<int:staff_id>/reviews")
-def get_staff_reviews(staff_id: int) -> tuple[dict[str, object], int]:
-    """Get reviews for a staff member with pagination (UC 2.16)."""
-    try:
-        from .models import StaffRating
-        
-        # Check if staff exists
-        staff = Staff.query.get(staff_id)
-        if not staff:
-            return jsonify({"error": "staff_not_found"}), 404
-
-        # Get pagination parameters
-        page = request.args.get("page", 1, type=int)
-        limit = request.args.get("limit", 20, type=int)
-
-        # Validate pagination
-        if page < 1 or limit < 1:
-            return jsonify({"error": "invalid_pagination"}), 400
-        if limit > 50:
-            limit = 50
-
-        # Query reviews with pagination
-        pagination = StaffRating.query.filter_by(staff_id=staff_id).order_by(
-            StaffRating.created_at.desc()
-        ).paginate(page=page, per_page=limit)
-
-        reviews_data = [review.to_dict() for review in pagination.items]
-
         return jsonify({
-            "staff_id": staff_id,
-            "reviews": reviews_data,
-            "pagination": {
-                "page": page,
-                "per_page": limit,
-                "total": pagination.total,
-                "pages": pagination.pages,
-            }
+            "message": f"Salon {action}d successfully",
+            "salon": salon.to_dict()
         }), 200
 
     except SQLAlchemyError as exc:
-        current_app.logger.exception("Failed to fetch staff reviews", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-@bp.get("/staff/<int:staff_id>/rating")
-def get_staff_rating(staff_id: int) -> tuple[dict[str, object], int]:
-    """Get average rating and stats for a staff member (UC 2.16)."""
-    try:
-        from .models import StaffRating
-        from sqlalchemy import func
-        
-        # Check if staff exists
-        staff = Staff.query.get(staff_id)
-        if not staff:
-            return jsonify({"error": "staff_not_found"}), 404
-
-        # Query aggregated rating data
-        rating_stats = db.session.query(
-            func.avg(StaffRating.rating).label("avg_rating"),
-            func.count(StaffRating.rating_id).label("total_ratings")
-        ).filter_by(staff_id=staff_id).first()
-
-        avg_rating = rating_stats.avg_rating or 0
-        total_ratings = rating_stats.total_ratings or 0
-
-        return jsonify({
-            "staff_id": staff_id,
-            "avg_rating": round(float(avg_rating), 2),
-            "total_ratings": total_ratings
-        }), 200
-
-    except SQLAlchemyError as exc:
-        current_app.logger.exception("Failed to fetch staff rating", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-# ===== Payment Methods (UC 2.18) =====
-
-@bp.get("/users/<int:user_id>/payment-methods")
-def get_payment_methods(user_id: int) -> tuple[dict[str, object], int]:
-    """Get all payment methods for a user (UC 2.18)."""
-    try:
-        from .models import PaymentMethod
-
-        payment_methods = PaymentMethod.query.filter_by(user_id=user_id).all()
-        return jsonify({
-            "payment_methods": [pm.to_dict() for pm in payment_methods]
-        }), 200
-
-    except SQLAlchemyError as exc:
-        current_app.logger.exception("Failed to fetch payment methods", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-@bp.post("/users/<int:user_id>/payment-methods")
-def add_payment_method(user_id: int) -> tuple[dict[str, object], int]:
-    """Add a new payment method for a user (UC 2.18)."""
-    try:
-        from .models import PaymentMethod, User
-
-        # Verify user exists
-        user = User.query.get(user_id)
-        if not user:
-            return jsonify({"error": "not_found", "message": "User not found"}), 404
-
-        data = request.get_json()
-
-        # Validate required fields
-        required = ["card_holder_name", "card_number", "card_brand", "expiry_month", "expiry_year"]
-        if not all(data.get(field) for field in required):
-            return jsonify({"error": "invalid_request"}), 400
-
-        # Extract last 4 digits
-        card_number = str(data.get("card_number", "")).replace(" ", "")
-        if len(card_number) < 4:
-            return jsonify({"error": "invalid_card_number"}), 400
-
-        card_last_four = card_number[-4:]
-
-        # If this is the first card, make it default
-        is_default = data.get("is_default", False)
-        existing_methods = PaymentMethod.query.filter_by(user_id=user_id).count()
-        if existing_methods == 0:
-            is_default = True
-
-        payment_method = PaymentMethod(
-            user_id=user_id,
-            card_holder_name=data.get("card_holder_name"),
-            card_number_last_four=card_last_four,
-            card_brand=data.get("card_brand"),
-            expiry_month=int(data.get("expiry_month")),
-            expiry_year=int(data.get("expiry_year")),
-            is_default=is_default,
-        )
-
-        db.session.add(payment_method)
-        db.session.commit()
-
-        return jsonify({"payment_method": payment_method.to_dict()}), 201
-
-    except (ValueError, KeyError) as e:
-        return jsonify({"error": "invalid_request"}), 400
-    except SQLAlchemyError as exc:
         db.session.rollback()
-        current_app.logger.exception("Failed to add payment method", exc_info=exc)
+        current_app.logger.exception("Failed to verify salon", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
-
-@bp.delete("/users/<int:user_id>/payment-methods/<int:payment_method_id>")
-def delete_payment_method(user_id: int, payment_method_id: int) -> tuple[dict[str, object], int]:
-    """Delete a payment method (UC 2.18)."""
-    try:
-        from .models import PaymentMethod
-
-        payment_method = PaymentMethod.query.filter_by(
-            payment_method_id=payment_method_id,
-            user_id=user_id
-        ).first()
-
-        if not payment_method:
-            return jsonify({"error": "not_found"}), 404
-
-        db.session.delete(payment_method)
-        db.session.commit()
-
-        return jsonify({"message": "Payment method deleted"}), 200
-
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to delete payment method", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-@bp.put("/users/<int:user_id>/payment-methods/<int:payment_method_id>/default")
-def set_default_payment_method(user_id: int, payment_method_id: int) -> tuple[dict[str, object], int]:
-    """Set a payment method as default (UC 2.18)."""
-    try:
-        from .models import PaymentMethod
-
-        payment_method = PaymentMethod.query.filter_by(
-            payment_method_id=payment_method_id,
-            user_id=user_id
-        ).first()
-
-        if not payment_method:
-            return jsonify({"error": "not_found"}), 404
-
-        # Unset all other defaults
-        PaymentMethod.query.filter_by(user_id=user_id).update({"is_default": False})
-        payment_method.is_default = True
-        db.session.commit()
-
-        return jsonify({"payment_method": payment_method.to_dict()}), 200
-
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to set default payment method", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-# ===== Transactions (UC 2.19) =====
-
-@bp.get("/users/<int:user_id>/transactions")
-def get_transactions(user_id: int) -> tuple[dict[str, object], int]:
-    """Get payment history for a user (UC 2.19)."""
-    try:
-        from .models import Transaction
-
-        # Get query parameters
-        page = request.args.get("page", 1, type=int)
-        limit = request.args.get("limit", 20, type=int)
-        limit = min(limit, 50)  # Max 50 per page
-
-        transactions = Transaction.query.filter_by(user_id=user_id).order_by(
-            Transaction.transaction_date.desc()
-        ).paginate(page=page, per_page=limit)
-
-        return jsonify({
-            "transactions": [t.to_dict() for t in transactions.items],
-            "pagination": {
-                "page": page,
-                "limit": limit,
-                "total": transactions.total,
-                "pages": transactions.pages,
-            }
-        }), 200
-
-    except SQLAlchemyError as exc:
-        current_app.logger.exception("Failed to fetch transactions", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-@bp.post("/users/<int:user_id>/transactions")
-def create_transaction(user_id: int) -> tuple[dict[str, object], int]:
-    """Create a transaction record (UC 2.19)."""
-    try:
-        from .models import Transaction, Appointment
-
-        data = request.get_json()
-
-        # Validate required fields
-        if not data.get("appointment_id") or not data.get("amount_cents"):
-            return jsonify({"error": "invalid_request"}), 400
-
-        appointment_id = data.get("appointment_id")
-        amount_cents = int(data.get("amount_cents"))
-
-        # Verify appointment exists and belongs to this user
-        appointment = Appointment.query.get(appointment_id)
-        if not appointment or appointment.client_id != user_id:
-            return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
-
-        transaction = Transaction(
-            user_id=user_id,
-            appointment_id=appointment_id,
-            payment_method_id=data.get("payment_method_id"),
-            amount_cents=amount_cents,
-            status=data.get("status", "completed"),
-        )
-
-        db.session.add(transaction)
-        db.session.commit()
-
-        return jsonify({"transaction": transaction.to_dict()}), 201
-
-    except (ValueError, KeyError) as e:
-        return jsonify({"error": "invalid_request"}), 400
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to create transaction", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-
-# ============================================================================
-# UC 3.2 - ADMIN: VIEW SALON DATA
-# ============================================================================
 
 @bp.get("/admin/salons")
 def get_all_salons() -> tuple[dict[str, object], int]:
