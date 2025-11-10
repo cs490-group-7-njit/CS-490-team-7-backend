@@ -2578,3 +2578,187 @@ def create_transaction(user_id: int) -> tuple[dict[str, object], int]:
         db.session.rollback()
         current_app.logger.exception("Failed to create transaction", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 3.2 - ADMIN: VIEW SALON DATA
+# ============================================================================
+
+@bp.get("/admin/salons")
+def get_all_salons() -> tuple[dict[str, object], int]:
+    """Get all salons with activity metrics (admin only).
+
+    Query Parameters:
+    - status: Filter by verification status (pending, approved, rejected)
+    - business_type: Filter by business type
+    - sort_by: Sort by field (created_at, name, verification_status)
+    - order: Sort order (asc, desc)
+    - limit: Results per page (default: 50, max: 100)
+    - offset: Pagination offset (default: 0)
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        # Get query parameters
+        status = request.args.get("status", "").strip().lower()
+        business_type = request.args.get("business_type", "").strip()
+        sort_by = request.args.get("sort_by", "created_at").strip()
+        order = request.args.get("order", "desc").strip().lower()
+        limit = request.args.get("limit", default=50, type=int)
+        offset = request.args.get("offset", default=0, type=int)
+
+        # Validate parameters
+        if status and status not in ["pending", "approved", "rejected"]:
+            status = ""
+        if sort_by not in ["created_at", "name", "verification_status"]:
+            sort_by = "created_at"
+        if order not in ["asc", "desc"]:
+            order = "desc"
+        limit = min(max(1, limit), 100)
+        offset = max(0, offset)
+
+        # Build query
+        query = Salon.query
+
+        # Apply status filter
+        if status:
+            query = query.filter(Salon.verification_status == status)
+
+        # Apply business type filter
+        if business_type:
+            query = query.filter(Salon.business_type.ilike(f"%{business_type}%"))
+
+        # Get total count
+        total_count = query.count()
+
+        # Apply sorting
+        if sort_by == "name":
+            sort_column = Salon.name
+        elif sort_by == "verification_status":
+            sort_column = Salon.verification_status
+        else:
+            sort_column = Salon.created_at
+
+        if order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        # Apply pagination
+        salons = query.limit(limit).offset(offset).all()
+
+        # Build response with activity metrics
+        salon_list = []
+        for salon in salons:
+            # Count salon activities
+            services_count = Service.query.filter_by(salon_id=salon.salon_id).count()
+            staff_count = Staff.query.filter_by(salon_id=salon.salon_id).count()
+            appointments_count = Appointment.query.filter_by(salon_id=salon.salon_id).count()
+            reviews_count = Review.query.filter_by(salon_id=salon.salon_id).count()
+
+            # Calculate average rating
+            if reviews_count > 0:
+                avg_rating = sum(review.rating for review in Review.query.filter_by(salon_id=salon.salon_id).all()) / reviews_count
+            else:
+                avg_rating = 0
+
+            # Recent activity (appointments in last 30 days)
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            recent_appointments = Appointment.query.filter(
+                Appointment.salon_id == salon.salon_id,
+                Appointment.created_at >= thirty_days_ago
+            ).count()
+
+            salon_data = salon.to_dict()
+            salon_data.update({
+                "services_count": services_count,
+                "staff_count": staff_count,
+                "appointments_count": appointments_count,
+                "reviews_count": reviews_count,
+                "average_rating": round(avg_rating, 1),
+                "recent_appointments": recent_appointments,
+                "is_active": recent_appointments > 0
+            })
+            salon_list.append(salon_data)
+
+        return jsonify({
+            "salons": salon_list,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "pages": (total_count + limit - 1) // limit,
+                "has_more": (offset + limit) < total_count
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon data", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/salons/summary")
+def get_salon_summary() -> tuple[dict[str, object], int]:
+    """Get summary statistics for all salons (admin only).
+
+    Returns: total salons, breakdown by status, active salons, average metrics.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        total_salons = Salon.query.count()
+
+        # Count by verification status
+        pending_count = Salon.query.filter_by(verification_status="pending").count()
+        approved_count = Salon.query.filter_by(verification_status="approved").count()
+        rejected_count = Salon.query.filter_by(verification_status="rejected").count()
+
+        # Count active salons (had appointments in last 30 days)
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        active_salons = (
+            Salon.query
+            .join(Appointment)
+            .filter(Appointment.created_at >= thirty_days_ago)
+            .distinct()
+            .count()
+        )
+
+        # Calculate average metrics
+        total_services = Service.query.count()
+        total_staff = Staff.query.count()
+        total_appointments = Appointment.query.count()
+        total_reviews = Review.query.count()
+
+        avg_services_per_salon = round(total_services / total_salons if total_salons > 0 else 0, 1)
+        avg_staff_per_salon = round(total_staff / total_salons if total_salons > 0 else 0, 1)
+        avg_appointments_per_salon = round(total_appointments / total_salons if total_salons > 0 else 0, 1)
+
+        # Calculate overall average rating
+        if total_reviews > 0:
+            all_ratings = [review.rating for review in Review.query.all()]
+            avg_rating = sum(all_ratings) / len(all_ratings)
+        else:
+            avg_rating = 0
+
+        return jsonify({
+            "summary": {
+                "total_salons": total_salons,
+                "by_status": {
+                    "pending": pending_count,
+                    "approved": approved_count,
+                    "rejected": rejected_count
+                },
+                "active_salons": active_salons,
+                "active_percentage": round((active_salons / total_salons * 100) if total_salons > 0 else 0, 1),
+                "average_metrics": {
+                    "services_per_salon": avg_services_per_salon,
+                    "staff_per_salon": avg_staff_per_salon,
+                    "appointments_per_salon": avg_appointments_per_salon,
+                    "overall_rating": round(avg_rating, 1)
+                }
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch salon summary", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
