@@ -1079,6 +1079,17 @@ def create_appointment() -> tuple[dict[str, object], int]:
         db.session.add(new_appointment)
         db.session.commit()
 
+        # UC 2.5: Create notification for appointment confirmation
+        notification = Notification(
+            user_id=client_id,
+            appointment_id=new_appointment.appointment_id,
+            title="Appointment Confirmed",
+            message=f"Your appointment at {staff.name}'s salon has been confirmed for {starts_at.strftime('%B %d, %Y at %I:%M %p')}.",
+            notification_type="appointment_confirmed",
+        )
+        db.session.add(notification)
+        db.session.commit()
+
         return jsonify({"message": "Appointment created successfully", "appointment": new_appointment.to_dict()}), 201
 
     except SQLAlchemyError as exc:
@@ -1596,6 +1607,38 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
 
         appointment.status = new_status
         db.session.commit()
+
+        # UC 2.5: Create notifications based on status change
+        if new_status == "completed":
+            notification = Notification(
+                user_id=appointment.client_id,
+                appointment_id=appointment.appointment_id,
+                title="Appointment Completed",
+                message=f"Your appointment at {appointment.staff.name}'s salon has been completed. You earned {points_earned} loyalty points!",
+                notification_type="appointment_completed",
+            )
+            db.session.add(notification)
+        elif new_status == "cancelled":
+            notification = Notification(
+                user_id=appointment.client_id,
+                appointment_id=appointment.appointment_id,
+                title="Appointment Cancelled",
+                message=f"Your appointment at {appointment.staff.name}'s salon has been cancelled.",
+                notification_type="appointment_cancelled",
+            )
+            db.session.add(notification)
+        elif new_status == "no-show":
+            notification = Notification(
+                user_id=appointment.client_id,
+                appointment_id=appointment.appointment_id,
+                title="Appointment No-Show",
+                message=f"You missed your appointment at {appointment.staff.name}'s salon.",
+                notification_type="appointment_cancelled",
+            )
+            db.session.add(notification)
+        
+        if new_status in ["completed", "cancelled", "no-show"]:
+            db.session.commit()
 
         return jsonify({"appointment": appointment.to_dict()}), 200
 
