@@ -2621,39 +2621,100 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             status: count for status, count in appointment_status_counts
         }
 
-        # Peak hours analysis
+        # Peak hours analysis - enhanced for UC 3.5
+        # Hourly distribution (0-23)
         hour_counts = db.session.query(
             db.func.extract('hour', Appointment.appointment_datetime),
             db.func.count(Appointment.appointment_id)
         ).group_by(db.func.extract('hour', Appointment.appointment_datetime)).all()
 
         analytics_data["peak_hours"] = {
-            int(hour): count for hour, count in hour_counts
+            "hourly": {int(hour): count for hour, count in hour_counts},
+            "by_day": {},
+            "by_period": {},
+            "peak_periods": {},
+            "insights": {}
         }
 
-        # Popular services
-        service_counts = db.session.query(
-            Service.name,
+        # Peak hours by day of week
+        day_hour_counts = db.session.query(
+            db.func.extract('dow', Appointment.appointment_datetime),  # 0=Sunday, 6=Saturday
+            db.func.extract('hour', Appointment.appointment_datetime),
             db.func.count(Appointment.appointment_id)
-        ).join(Appointment).group_by(Service.service_id, Service.name).order_by(
-            db.func.count(Appointment.appointment_id).desc()
-        ).limit(10).all()
+        ).group_by(
+            db.func.extract('dow', Appointment.appointment_datetime),
+            db.func.extract('hour', Appointment.appointment_datetime)
+        ).all()
 
-        analytics_data["popular_services"] = [
-            {"service": name, "bookings": count} for name, count in service_counts
-        ]
+        day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+        for day_idx, hour, count in day_hour_counts:
+            day_name = day_names[int(day_idx)]
+            if day_name not in analytics_data["peak_hours"]["by_day"]:
+                analytics_data["peak_hours"]["by_day"][day_name] = {}
+            analytics_data["peak_hours"]["by_day"][day_name][int(hour)] = count
 
-        # Geographic distribution (by city/state if available)
-        # This assumes salons have location data
-        location_counts = db.session.query(
-            Salon.city,
-            db.func.count(Salon.salon_id)
-        ).filter(Salon.city.isnot(None)).group_by(Salon.city).order_by(
-            db.func.count(Salon.salon_id).desc()
-        ).limit(10).all()
+        # Peak hours by time period
+        period_counts = db.session.query(
+            db.func.case(
+                (db.func.extract('hour', Appointment.appointment_datetime) < 12, 'morning'),
+                (db.func.extract('hour', Appointment.appointment_datetime) < 17, 'afternoon'),
+                else_='evening'
+            ),
+            db.func.count(Appointment.appointment_id)
+        ).group_by(
+            db.func.case(
+                (db.func.extract('hour', Appointment.appointment_datetime) < 12, 'morning'),
+                (db.func.extract('hour', Appointment.appointment_datetime) < 17, 'afternoon'),
+                else_='evening'
+            )
+        ).all()
 
-        analytics_data["geographic_distribution"] = {
-            location: count for location, count in location_counts
+        analytics_data["peak_hours"]["by_period"] = {
+            period: count for period, count in period_counts
+        }
+
+        # Identify peak periods (hours with above-average appointments)
+        if hour_counts:
+            total_appointments = sum(count for _, count in hour_counts)
+            avg_per_hour = total_appointments / 24
+            
+            analytics_data["peak_hours"]["peak_periods"] = {
+                int(hour): count for hour, count in hour_counts if count > avg_per_hour * 1.5
+            }
+            
+            # Peak hours insights
+            peak_hours_list = [int(hour) for hour, count in hour_counts if count > avg_per_hour * 1.5]
+            if peak_hours_list:
+                analytics_data["peak_hours"]["insights"] = {
+                    "peak_hours_range": f"{min(peak_hours_list):02d}:00 - {max(peak_hours_list):02d}:00",
+                    "busiest_hour": f"{max(hour_counts, key=lambda x: x[1])[0]:02d}:00",
+                    "total_peak_appointments": sum(count for hour, count in hour_counts if count > avg_per_hour * 1.5),
+                    "peak_percentage": round((sum(count for hour, count in hour_counts if count > avg_per_hour * 1.5) / total_appointments) * 100, 1)
+                }
+
+        # Appointment trends by day of week
+        day_counts = db.session.query(
+            db.func.extract('dow', Appointment.appointment_datetime),
+            db.func.count(Appointment.appointment_id)
+        ).group_by(db.func.extract('dow', Appointment.appointment_datetime)).all()
+
+        analytics_data["appointment_trends_by_day"] = {
+            day_names[int(day_idx)]: count for day_idx, count in day_counts
+        }
+
+        # Appointment trends by time of day (hourly breakdown for last 7 days)
+        from datetime import datetime, timedelta
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        
+        recent_hourly = db.session.query(
+            db.func.extract('hour', Appointment.appointment_datetime),
+            db.func.count(Appointment.appointment_id)
+        ).filter(Appointment.created_at >= week_ago).group_by(
+            db.func.extract('hour', Appointment.appointment_datetime)
+        ).all()
+
+        analytics_data["recent_hourly_trends"] = {
+            int(hour): count for hour, count in recent_hourly
         }
 
         return jsonify({"analytics": analytics_data}), 200
