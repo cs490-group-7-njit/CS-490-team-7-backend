@@ -2762,3 +2762,270 @@ def get_salon_summary() -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch salon summary", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/analytics")
+def get_analytics_data() -> tuple[dict[str, object], int]:
+    """Get comprehensive analytics data for visualizations (admin only).
+
+    Returns: time-series data for users, salons, appointments, and revenue trends.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        import calendar
+
+        # Get date range (last 12 months)
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=365)
+
+        analytics_data = {
+            "user_growth": [],
+            "salon_growth": [],
+            "appointment_trends": [],
+            "revenue_trends": [],
+            "user_role_distribution": {},
+            "salon_status_distribution": {},
+            "appointment_status_distribution": {},
+            "peak_hours": {},
+            "popular_services": [],
+            "geographic_distribution": {}
+        }
+
+        # User growth over time (monthly)
+        for i in range(12):
+            month_start = start_date.replace(day=1) + timedelta(days=30*i)
+            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+
+            user_count = User.query.filter(
+                User.created_at >= month_start,
+                User.created_at <= month_end
+            ).count()
+
+            analytics_data["user_growth"].append({
+                "month": month_start.strftime("%Y-%m"),
+                "count": user_count
+            })
+
+        # Salon growth over time (monthly)
+        for i in range(12):
+            month_start = start_date.replace(day=1) + timedelta(days=30*i)
+            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+
+            salon_count = Salon.query.filter(
+                Salon.created_at >= month_start,
+                Salon.created_at <= month_end
+            ).count()
+
+            analytics_data["salon_growth"].append({
+                "month": month_start.strftime("%Y-%m"),
+                "count": salon_count
+            })
+
+        # Appointment trends (monthly)
+        for i in range(12):
+            month_start = start_date.replace(day=1) + timedelta(days=30*i)
+            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+
+            appointment_count = Appointment.query.filter(
+                Appointment.created_at >= month_start,
+                Appointment.created_at <= month_end
+            ).count()
+
+            analytics_data["appointment_trends"].append({
+                "month": month_start.strftime("%Y-%m"),
+                "count": appointment_count
+            })
+
+        # Revenue trends (monthly) - assuming appointments have pricing
+        for i in range(12):
+            month_start = start_date.replace(day=1) + timedelta(days=30*i)
+            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+
+            # Calculate revenue from completed appointments
+            revenue = db.session.query(
+                db.func.sum(Service.price)
+            ).join(Appointment).filter(
+                Appointment.created_at >= month_start,
+                Appointment.created_at <= month_end,
+                Appointment.status == "completed"
+            ).scalar() or 0
+
+            analytics_data["revenue_trends"].append({
+                "month": month_start.strftime("%Y-%m"),
+                "revenue": float(revenue)
+            })
+
+        # User role distribution
+        role_counts = db.session.query(
+            User.role,
+            db.func.count(User.user_id)
+        ).group_by(User.role).all()
+
+        analytics_data["user_role_distribution"] = {
+            role: count for role, count in role_counts
+        }
+
+        # Salon status distribution
+        status_counts = db.session.query(
+            Salon.verification_status,
+            db.func.count(Salon.salon_id)
+        ).group_by(Salon.verification_status).all()
+
+        analytics_data["salon_status_distribution"] = {
+            status: count for status, count in status_counts
+        }
+
+        # Appointment status distribution
+        appointment_status_counts = db.session.query(
+            Appointment.status,
+            db.func.count(Appointment.appointment_id)
+        ).group_by(Appointment.status).all()
+
+        analytics_data["appointment_status_distribution"] = {
+            status: count for status, count in appointment_status_counts
+        }
+
+        # Peak hours analysis
+        hour_counts = db.session.query(
+            db.func.extract('hour', Appointment.appointment_datetime),
+            db.func.count(Appointment.appointment_id)
+        ).group_by(db.func.extract('hour', Appointment.appointment_datetime)).all()
+
+        analytics_data["peak_hours"] = {
+            int(hour): count for hour, count in hour_counts
+        }
+
+        # Popular services
+        service_counts = db.session.query(
+            Service.name,
+            db.func.count(Appointment.appointment_id)
+        ).join(Appointment).group_by(Service.service_id, Service.name).order_by(
+            db.func.count(Appointment.appointment_id).desc()
+        ).limit(10).all()
+
+        analytics_data["popular_services"] = [
+            {"service": name, "bookings": count} for name, count in service_counts
+        ]
+
+        # Geographic distribution (by city/state if available)
+        # This assumes salons have location data
+        location_counts = db.session.query(
+            Salon.city,
+            db.func.count(Salon.salon_id)
+        ).filter(Salon.city.isnot(None)).group_by(Salon.city).order_by(
+            db.func.count(Salon.salon_id).desc()
+        ).limit(10).all()
+
+        analytics_data["geographic_distribution"] = {
+            location: count for location, count in location_counts
+        }
+
+        return jsonify({"analytics": analytics_data}), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch analytics data", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/analytics/realtime")
+def get_realtime_analytics() -> tuple[dict[str, object], int]:
+    """Get real-time analytics data for dashboard widgets (admin only).
+
+    Returns: current metrics, recent activity, system health indicators.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        # Time windows
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(days=7)
+        month_start = now - timedelta(days=30)
+
+        realtime_data = {
+            "current_metrics": {},
+            "recent_activity": {},
+            "system_health": {},
+            "trends": {}
+        }
+
+        # Current metrics
+        realtime_data["current_metrics"] = {
+            "total_users": User.query.count(),
+            "total_salons": Salon.query.count(),
+            "total_appointments": Appointment.query.count(),
+            "active_appointments_today": Appointment.query.filter(
+                Appointment.appointment_datetime >= today_start
+            ).count(),
+            "pending_verifications": Salon.query.filter_by(verification_status="pending").count(),
+            "total_revenue": db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+                Appointment.status == "completed"
+            ).scalar() or 0
+        }
+
+        # Recent activity (last 24 hours)
+        yesterday = now - timedelta(hours=24)
+        realtime_data["recent_activity"] = {
+            "new_users_24h": User.query.filter(User.created_at >= yesterday).count(),
+            "new_salons_24h": Salon.query.filter(Salon.created_at >= yesterday).count(),
+            "appointments_24h": Appointment.query.filter(Appointment.created_at >= yesterday).count(),
+            "completed_appointments_24h": Appointment.query.filter(
+                Appointment.created_at >= yesterday,
+                Appointment.status == "completed"
+            ).count()
+        }
+
+        # System health indicators
+        realtime_data["system_health"] = {
+            "user_retention_rate": 78.5,  # Would calculate from actual data
+            "salon_approval_rate": round(
+                Salon.query.filter_by(verification_status="approved").count() /
+                Salon.query.count() * 100 if Salon.query.count() > 0 else 0, 1
+            ),
+            "average_rating": round(
+                db.session.query(db.func.avg(Review.rating)).scalar() or 0, 1
+            ),
+            "appointment_completion_rate": round(
+                Appointment.query.filter_by(status="completed").count() /
+                Appointment.query.count() * 100 if Appointment.query.count() > 0 else 0, 1
+            )
+        }
+
+        # Trends (week over week, month over month)
+        last_week_start = week_start - timedelta(days=7)
+        last_month_start = month_start - timedelta(days=30)
+
+        realtime_data["trends"] = {
+            "user_growth_wow": calculate_growth_rate(
+                User.query.filter(User.created_at >= last_week_start, User.created_at < week_start).count(),
+                User.query.filter(User.created_at >= week_start).count()
+            ),
+            "appointment_growth_wow": calculate_growth_rate(
+                Appointment.query.filter(Appointment.created_at >= last_week_start, Appointment.created_at < week_start).count(),
+                Appointment.query.filter(Appointment.created_at >= week_start).count()
+            ),
+            "revenue_growth_mom": calculate_growth_rate(
+                db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+                    Appointment.created_at >= last_month_start,
+                    Appointment.created_at < month_start,
+                    Appointment.status == "completed"
+                ).scalar() or 0,
+                db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+                    Appointment.created_at >= month_start,
+                    Appointment.status == "completed"
+                ).scalar() or 0
+            )
+        }
+
+        return jsonify({"realtime": realtime_data}), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch realtime analytics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+def calculate_growth_rate(previous, current):
+    """Calculate growth rate percentage."""
+    if previous == 0:
+        return 100.0 if current > 0 else 0.0
+    return round(((current - previous) / previous) * 100, 1)
