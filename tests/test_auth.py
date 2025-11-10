@@ -53,7 +53,7 @@ def test_login_invalid_password(app, client) -> None:
     assert body["error"] == "unauthorized"
 
 
-def test_login_non_vendor_forbidden(app, client) -> None:
+def test_login_client_allowed(app, client) -> None:
     with app.app_context():
         _create_user_with_auth(role="client", password="Secret123!", email="client@example.com")
 
@@ -62,6 +62,8 @@ def test_login_non_vendor_forbidden(app, client) -> None:
         json={"email": "client@example.com", "password": "Secret123!"},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 200
     body = response.get_json()
-    assert body["error"] == "forbidden"
+    assert "token" in body and body["token"]
+    assert body["user"]["email"] == "client@example.com"
+    assert body["user"]["role"] == "client"

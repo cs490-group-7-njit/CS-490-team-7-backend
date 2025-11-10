@@ -80,8 +80,8 @@ def list_salons() -> tuple[dict[str, object], int]:
                 Salon.business_type.ilike(business_type)
             )
         
-        # Filter to only published salons (uncomment when ready)
-        # salon_query = salon_query.filter(Salon.is_published.is_(True))
+        # Filter to only published salons
+        salon_query = salon_query.filter(Salon.is_published.is_(True))
         
         # Apply sorting
         if sort_field == "name":
