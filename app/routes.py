@@ -939,8 +939,17 @@ def list_appointments() -> tuple[dict[str, list[dict[str, object]]], int]:
     try:
         from .models import Appointment
 
-        # For now, return all appointments. In production, filter by user role
-        appointments = Appointment.query.order_by(Appointment.starts_at.desc()).all()
+        user_id = get_jwt_identity()
+        
+        # If no user authenticated, return empty list
+        if not user_id:
+            return jsonify({"appointments": []}), 200
+        
+        # Get appointments where user is the client
+        appointments = Appointment.query.filter(
+            Appointment.client_id == user_id
+        ).order_by(Appointment.starts_at.desc()).all()
+        
         payload = {"appointments": [appt.to_dict() for appt in appointments]}
         return jsonify(payload), 200
 

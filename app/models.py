@@ -312,9 +312,13 @@ class Appointment(db.Model):
         return {
             "id": self.appointment_id,
             "salon_id": self.salon_id,
+            "salon_name": self.salon.name if self.salon else None,
             "staff_id": self.staff_id,
+            "staff_name": self.staff.user.name if self.staff and self.staff.user else None,
             "service_id": self.service_id,
+            "service_name": self.service.name if self.service else None,
             "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
             "starts_at": self.starts_at.isoformat() if self.starts_at else None,
             "ends_at": self.ends_at.isoformat() if self.ends_at else None,
             "status": self.status,
