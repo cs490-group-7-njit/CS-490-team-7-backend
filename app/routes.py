@@ -2672,6 +2672,181 @@ def get_salon_summary() -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/admin/users")
+def get_all_users() -> tuple[dict[str, object], int]:
+    """Get all users with activity metrics (admin only).
+
+    Query Parameters:
+    - role: Filter by user role (admin, vendor, client)
+    - status: Filter by activity status (active, inactive)
+    - sort_by: Sort by field (created_at, name, last_login)
+    - order: Sort order (asc, desc)
+    - limit: Results per page (default: 50, max: 100)
+    - offset: Pagination offset (default: 0)
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        # Get query parameters
+        role = request.args.get("role", "").strip().lower()
+        status = request.args.get("status", "").strip().lower()
+        sort_by = request.args.get("sort_by", "created_at").strip()
+        order = request.args.get("order", "desc").strip().lower()
+        limit = request.args.get("limit", default=50, type=int)
+        offset = request.args.get("offset", default=0, type=int)
+
+        # Validate parameters
+        if role and role not in ["admin", "vendor", "client"]:
+            role = ""
+        if status and status not in ["active", "inactive"]:
+            status = ""
+        if sort_by not in ["created_at", "name", "last_login"]:
+            sort_by = "created_at"
+        if order not in ["asc", "desc"]:
+            order = "desc"
+        limit = min(max(1, limit), 100)
+        offset = max(0, offset)
+
+        # Build query with auth account relationship
+        query = User.query.options(joinedload(User.auth_account))
+
+        # Apply role filter
+        if role:
+            query = query.filter(User.role == role)
+
+        # Apply status filter (active = last login within 30 days)
+        if status:
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            if status == "active":
+                query = query.join(AuthAccount).filter(AuthAccount.last_login_at >= thirty_days_ago)
+            elif status == "inactive":
+                query = query.join(AuthAccount).filter(AuthAccount.last_login_at < thirty_days_ago)
+
+        # Get total count
+        total_count = query.count()
+
+        # Apply sorting
+        if sort_by == "name":
+            sort_column = User.name
+        elif sort_by == "last_login":
+            sort_column = AuthAccount.last_login_at
+            query = query.join(AuthAccount)
+        else:
+            sort_column = User.created_at
+
+        if order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        # Apply pagination
+        users = query.limit(limit).offset(offset).all()
+
+        # Build response with activity metrics
+        user_list = []
+        for user in users:
+            # Count user activities
+            bookings_count = Appointment.query.filter_by(client_id=user.user_id).count()
+            reviews_count = Review.query.filter_by(client_id=user.user_id).count()
+            
+            # Calculate total spending
+            total_spending = 0
+            if user.role == "client":
+                transactions = Transaction.query.filter_by(user_id=user.user_id).all()
+                total_spending = sum(t.amount for t in transactions if t.status == "completed")
+
+            # Determine if user is active
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            last_login = user.auth_account.last_login_at if user.auth_account else None
+            is_active = last_login and last_login >= thirty_days_ago
+
+            user_data = user.to_dict_basic()
+            user_data.update({
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "bookings_count": bookings_count,
+                "reviews_count": reviews_count,
+                "total_spending": round(float(total_spending), 2),
+                "is_active": is_active,
+                "last_login": last_login.isoformat() if last_login else None
+            })
+            user_list.append(user_data)
+
+        return jsonify({
+            "users": user_list,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count,
+                "pages": (total_count + limit - 1) // limit,
+                "has_more": (offset + limit) < total_count
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch user data", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/users/summary")
+def get_user_summary() -> tuple[dict[str, object], int]:
+    """Get summary statistics for all users (admin only).
+
+    Returns: total users, breakdown by role, active users, average metrics.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        total_users = User.query.count()
+
+        # Count by role
+        admin_count = User.query.filter_by(role="admin").count()
+        vendor_count = User.query.filter_by(role="vendor").count()
+        client_count = User.query.filter_by(role="client").count()
+
+        # Count active users (last login within 30 days)
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        active_users = (
+            User.query
+            .join(AuthAccount)
+            .filter(AuthAccount.last_login_at >= thirty_days_ago)
+            .count()
+        )
+
+        # Calculate average metrics
+        total_bookings = Appointment.query.count()
+        total_reviews = Review.query.count()
+        
+        avg_bookings_per_user = round(total_bookings / total_users if total_users > 0 else 0, 1)
+        avg_reviews_per_user = round(total_reviews / total_users if total_users > 0 else 0, 2)
+
+        # Calculate average spending per user
+        all_transactions = Transaction.query.filter_by(status="completed").all()
+        total_spending = sum(t.amount for t in all_transactions)
+        avg_spending_per_user = round(total_spending / total_users if total_users > 0 else 0, 2)
+
+        return jsonify({
+            "summary": {
+                "total_users": total_users,
+                "by_role": {
+                    "admin": admin_count,
+                    "vendor": vendor_count,
+                    "client": client_count
+                },
+                "active_users": active_users,
+                "active_percentage": round((active_users / total_users * 100) if total_users > 0 else 0, 1),
+                "average_metrics": {
+                    "bookings_per_user": avg_bookings_per_user,
+                    "reviews_per_user": avg_reviews_per_user,
+                    "spending_per_user": avg_spending_per_user
+                }
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch user summary", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
 @bp.get("/admin/analytics")
 def get_analytics_data() -> tuple[dict[str, object], int]:
     """Get comprehensive analytics data for visualizations (admin only).
