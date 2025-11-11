@@ -37,7 +37,18 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config.update(test_config)
 
     # Allow the React dev server to call our API without CORS issues during development.
-    CORS(app, resources={r"/*": {"origins": "http://localhost:5173", "supports_credentials": True}}, allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    # Accept both localhost and 127.0.0.1 on dev ports, including 5001 for this backend
+    CORS(app, resources={r"/*": {
+        "origins": [
+            "http://localhost:5173",
+            "http://localhost:5174", 
+            "http://localhost:5175",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://127.0.0.1:5175",
+        ],
+        "supports_credentials": True
+    }}, allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
     db.init_app(app)
 
