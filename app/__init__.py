@@ -48,7 +48,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "http://127.0.0.1:5175",
         ],
         "supports_credentials": True
-    }}, allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
     db.init_app(app)
 
