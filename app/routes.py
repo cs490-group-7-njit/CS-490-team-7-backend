@@ -3947,6 +3947,10 @@ def get_health_alerts() -> tuple[dict[str, object], int]:
             "warning_count": sum(1 for a in active_alerts if a["severity"] == "warning"),
             "last_check": now.isoformat()
         }), 200
+    
+    except Exception as exc:
+        current_app.logger.exception("Failed to get health alerts", exc_info=exc)
+        return jsonify({"error": "health_check_failed"}), 500
 
 
 # ============================================================================
@@ -6207,4 +6211,274 @@ def delete_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, obj
     except SQLAlchemyError as exc:
         db.session.rollback()
         current_app.logger.exception("Failed to delete social media link", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
+# UC 1.18 - Send Promotions (Vendor Promotion Management)
+# ============================================================================
+
+@bp.post("/salons/<int:salon_id>/promotions")
+def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
+    """Vendor creates a promotional discount for their salon (UC 1.18)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        
+        # Validate required fields
+        discount_percentage = payload.get("discount_percentage")
+        discount_cents = payload.get("discount_cents")
+        description = (payload.get("description") or "").strip()
+        expires_at = payload.get("expires_at")
+        target_clients = payload.get("target_clients", "all")
+        
+        if not all([discount_percentage is not None, discount_cents, description, expires_at]):
+            return jsonify({"error": "invalid_payload", "message": "All fields required"}), 400
+        
+        # Verify salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor authorization
+        vendor_id = request.headers.get("X-Vendor-ID") or payload.get("vendor_id")
+        if not vendor_id or int(vendor_id) != salon.vendor_id:
+            return jsonify({"error": "unauthorized", "message": "Vendor mismatch"}), 403
+        
+        try:
+            expires_at_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Create discount alerts for target clients
+        alerts_created = 0
+        
+        if target_clients == "all":
+            # Get all existing clients of this salon
+            existing_clients = db.session.query(Appointment.client_id).filter(
+                Appointment.salon_id == salon_id
+            ).distinct().all()
+            
+            for (client_id,) in existing_clients:
+                alert = DiscountAlert(
+                    user_id=client_id,
+                    salon_id=salon_id,
+                    discount_percentage=discount_percentage,
+                    discount_cents=discount_cents,
+                    description=description,
+                    expires_at=expires_at_dt,
+                    is_read=False,
+                    is_dismissed=False
+                )
+                db.session.add(alert)
+                alerts_created += 1
+                
+                # Create notification for client
+                notification = Notification(
+                    user_id=client_id,
+                    title="Special Promotion",
+                    message=f"Great news! {salon.name} has a special promotion for you: {description}",
+                    notification_type="discount_alert"
+                )
+                db.session.add(notification)
+        
+        elif isinstance(target_clients, list) and len(target_clients) > 0:
+            # Create promotions for specific clients
+            for client_id in target_clients:
+                # Verify client exists
+                client = User.query.get(client_id)
+                if not client:
+                    continue
+                
+                alert = DiscountAlert(
+                    user_id=client_id,
+                    salon_id=salon_id,
+                    discount_percentage=discount_percentage,
+                    discount_cents=discount_cents,
+                    description=description,
+                    expires_at=expires_at_dt,
+                    is_read=False,
+                    is_dismissed=False
+                )
+                db.session.add(alert)
+                alerts_created += 1
+                
+                # Create notification for client
+                notification = Notification(
+                    user_id=client_id,
+                    title="Special Promotion",
+                    message=f"Great news! {salon.name} has a special promotion for you: {description}",
+                    notification_type="discount_alert"
+                )
+                db.session.add(notification)
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Promotion created successfully",
+            "alerts_created": alerts_created,
+            "description": description,
+            "expires_at": expires_at_dt.isoformat()
+        }), 201
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/promotions")
+def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all active promotions for a salon (UC 1.18)."""
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor authorization
+        vendor_id = request.headers.get("X-Vendor-ID")
+        if not vendor_id or int(vendor_id) != salon.vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Get active promotions (non-expired discount alerts)
+        promotions = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id,
+            DiscountAlert.expires_at > datetime.now(timezone.utc)
+        ).order_by(DiscountAlert.created_at.desc()).all()
+        
+        promotion_data = [promo.to_dict() for promo in promotions]
+        
+        return jsonify({
+            "promotions": promotion_data,
+            "total_active": len(promotions)
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch promotions", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/promotions/<int:alert_id>")
+def update_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, object], int]:
+    """Vendor updates a promotion (UC 1.18)."""
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor authorization
+        vendor_id = request.headers.get("X-Vendor-ID")
+        if not vendor_id or int(vendor_id) != salon.vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        alert = DiscountAlert.query.get(alert_id)
+        if not alert or alert.salon_id != salon_id:
+            return jsonify({"error": "promotion_not_found"}), 404
+        
+        payload = request.get_json(silent=True) or {}
+        
+        # Update allowed fields
+        if "description" in payload:
+            alert.description = payload.get("description")
+        
+        if "discount_percentage" in payload:
+            alert.discount_percentage = payload.get("discount_percentage")
+        
+        if "discount_cents" in payload:
+            alert.discount_cents = payload.get("discount_cents")
+        
+        if "expires_at" in payload:
+            try:
+                alert.expires_at = datetime.fromisoformat(payload.get("expires_at").replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return jsonify({"error": "invalid_date_format"}), 400
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Promotion updated successfully",
+            "alert": alert.to_dict()
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/promotions/<int:alert_id>")
+def delete_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, str], int]:
+    """Vendor removes/expires a promotion (UC 1.18)."""
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor authorization
+        vendor_id = request.headers.get("X-Vendor-ID")
+        if not vendor_id or int(vendor_id) != salon.vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        alert = DiscountAlert.query.get(alert_id)
+        if not alert or alert.salon_id != salon_id:
+            return jsonify({"error": "promotion_not_found"}), 404
+        
+        db.session.delete(alert)
+        db.session.commit()
+        
+        return jsonify({"message": "Promotion deleted successfully"}), 200
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete promotion", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/promotions/analytics")
+def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get analytics for vendor's promotions (UC 1.18)."""
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        vendor_id = request.headers.get("X-Vendor-ID")
+        if not vendor_id or int(vendor_id) != salon.vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Active promotions
+        active = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id,
+            DiscountAlert.expires_at > datetime.now(timezone.utc)
+        ).count()
+        
+        # Total sent
+        total_sent = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id
+        ).count()
+        
+        # Read/dismissed
+        read_count = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id,
+            DiscountAlert.is_read == True
+        ).count()
+        
+        dismissed_count = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id,
+            DiscountAlert.is_dismissed == True
+        ).count()
+        
+        open_rate = round((read_count / total_sent * 100) if total_sent > 0 else 0, 1)
+        dismiss_rate = round((dismissed_count / total_sent * 100) if total_sent > 0 else 0, 1)
+        
+        return jsonify({
+            "active_promotions": active,
+            "total_sent": total_sent,
+            "read_count": read_count,
+            "dismissed_count": dismissed_count,
+            "open_rate": open_rate,
+            "dismiss_rate": dismiss_rate
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch promotion analytics", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
