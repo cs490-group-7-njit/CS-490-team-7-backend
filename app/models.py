@@ -745,3 +745,188 @@ class AppointmentMemo(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+# UC 1.17: Service Images (Before/After)
+class ServiceImage(db.Model):
+    """Before and after images for services."""
+
+    __tablename__ = "service_images"
+
+    image_id = db.Column(db.Integer, primary_key=True)
+    service_id = db.Column(db.Integer, db.ForeignKey("services.service_id"), nullable=False)
+    image_type = db.Column(
+        db.Enum("before", "after", name="image_type", native_enum=False, validate_strings=True),
+        nullable=False,
+    )
+    image_url = db.Column(db.String(500), nullable=False)
+    title = db.Column(db.String(200))
+    description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+
+    service = db.relationship("Service")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.image_id,
+            "service_id": self.service_id,
+            "image_type": self.image_type,
+            "image_url": self.image_url,
+            "title": self.title,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# UC 1.18: Promotions
+class Promotion(db.Model):
+    """Promotional offers created by vendors."""
+
+    __tablename__ = "promotions"
+
+    promotion_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    vendor_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    discount_percent = db.Column(db.Integer)
+    discount_amount_cents = db.Column(db.Integer)
+    target_customers = db.Column(db.String(50), default="all")  # "all", "loyal", "new"
+    start_date = db.Column(db.DateTime, nullable=False)
+    end_date = db.Column(db.DateTime, nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, server_default="1")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    vendor = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.promotion_id,
+            "salon_id": self.salon_id,
+            "vendor_id": self.vendor_id,
+            "title": self.title,
+            "description": self.description,
+            "discount_percent": self.discount_percent,
+            "discount_amount_cents": self.discount_amount_cents,
+            "discount_amount_dollars": self.discount_amount_cents / 100.0 if self.discount_amount_cents else None,
+            "target_customers": self.target_customers,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# UC 1.19: Delay Notifications
+class DelayNotification(db.Model):
+    """Notifications when barbers are running late."""
+
+    __tablename__ = "delay_notifications"
+
+    notification_id = db.Column(db.Integer, primary_key=True)
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.appointment_id"), nullable=False)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    delay_minutes = db.Column(db.Integer, nullable=False)
+    reason = db.Column(db.String(500))
+    sent_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+
+    appointment = db.relationship("Appointment")
+    staff = db.relationship("Staff")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.notification_id,
+            "appointment_id": self.appointment_id,
+            "staff_id": self.staff_id,
+            "delay_minutes": self.delay_minutes,
+            "reason": self.reason,
+            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# UC 1.20: Online Shop Products
+class ShopProduct(db.Model):
+    """Products sold in the salon's online shop."""
+
+    __tablename__ = "shop_products"
+
+    product_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(db.Integer, db.ForeignKey("salons.salon_id"), nullable=False)
+    vendor_id = db.Column(db.Integer, db.ForeignKey("users.user_id"), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    price_cents = db.Column(db.Integer, nullable=False)
+    stock_quantity = db.Column(db.Integer, nullable=False, server_default="0")
+    image_url = db.Column(db.String(500))
+    category = db.Column(db.String(100))
+    is_available = db.Column(db.Boolean, nullable=False, server_default="1")
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    vendor = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.product_id,
+            "salon_id": self.salon_id,
+            "vendor_id": self.vendor_id,
+            "name": self.name,
+            "description": self.description,
+            "price_cents": self.price_cents,
+            "price_dollars": self.price_cents / 100.0,
+            "stock_quantity": self.stock_quantity,
+            "image_url": self.image_url,
+            "category": self.category,
+            "is_available": self.is_available,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# UC 1.22: Staff Social Media Links
+class SocialMediaLink(db.Model):
+    """Social media accounts for staff members."""
+
+    __tablename__ = "social_media_links"
+
+    link_id = db.Column(db.Integer, primary_key=True)
+    staff_id = db.Column(db.Integer, db.ForeignKey("staff.staff_id"), nullable=False)
+    platform = db.Column(db.String(50), nullable=False)  # instagram, facebook, tiktok, etc.
+    url = db.Column(db.String(500), nullable=False)
+    handle = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    staff = db.relationship("Staff")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.link_id,
+            "staff_id": self.staff_id,
+            "platform": self.platform,
+            "url": self.url,
+            "handle": self.handle,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

@@ -290,9 +290,32 @@ def update_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
     }), 200
 
 
+@bp.post("/salons/<int:salon_id>/verification")
+def submit_for_verification_post(salon_id: int):
+    """Vendor submits their salon for verification (UC 1.5)."""
+    salon = Salon.query.get(salon_id)
+    if not salon:
+        return jsonify({"error": "not_found", "message": "Salon not found"}), 404
+
+    try:
+        # Mark as submitted for verification
+        salon.verification_status = "pending"
+        db.session.commit()
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to submit for verification", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    return jsonify({
+        "message": "Verification request submitted successfully.",
+        "salon_id": salon.salon_id,
+        "verification_status": salon.verification_status
+    }), 201
+
+
 @bp.put("/salons/<int:salon_id>/verify")
 def submit_for_verification(salon_id: int):
-    """Vendor submits their salon for verification."""
+    """Vendor submits their salon for verification (alternative endpoint)."""
     payload = request.get_json(silent=True) or {}
     business_tin = (payload.get("business_tin") or "").strip()
 
@@ -400,6 +423,28 @@ def verify_user() -> tuple[dict[str, object], int]:
 def _build_token(payload: dict[str, object]) -> str:
     serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
     return serializer.dumps(payload)
+
+
+def get_jwt_identity() -> int | None:
+    """Extract and validate user_id from Authorization header token.
+    
+    Returns the user_id if token is valid, None if missing or invalid.
+    This supports the custom JWT token system using URLSafeTimedSerializer.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    
+    if not auth_header.startswith("Bearer "):
+        return None
+    
+    token = auth_header[7:]  # Remove "Bearer " prefix
+    
+    try:
+        serializer = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="auth-token")
+        payload = serializer.loads(token, max_age=86400)  # 24-hour expiration
+        return payload.get("user_id")
+    except Exception:
+        # Invalid or expired token
+        return None
 
 
 @bp.post("/auth/login")
@@ -985,14 +1030,14 @@ def create_appointment() -> tuple[dict[str, object], int]:
             notes=notes,
         )
         db.session.add(new_appointment)
-        db.session.commit()
+        db.session.flush()  # Flush to get the ID before commit
 
         # UC 2.5: Create notification for appointment confirmation
         notification = Notification(
             user_id=client_id,
             appointment_id=new_appointment.appointment_id,
             title="Appointment Confirmed",
-            message=f"Your appointment at {staff.name}'s salon has been confirmed for {starts_at.strftime('%B %d, %Y at %I:%M %p')}.",
+            message=f"Your appointment has been confirmed for {starts_at.strftime('%B %d, %Y at %I:%M %p')}.",
             notification_type="appointment_confirmed",
         )
         db.session.add(notification)
@@ -1804,17 +1849,10 @@ def add_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
         review.vendor_reply_at = datetime.now(timezone.utc)
         db.session.commit()
 
-        # Create notification for client
-        notification = Notification(
-            user_id=review.client_id,
-            title="Salon Owner Replied to Your Review",
-            message=f"The owner of {salon.name} has replied to your review.",
-            notification_type="review_reply",
-        )
-        db.session.add(notification)
-        db.session.commit()
-
-        return jsonify({"review": review.to_dict()}), 200
+        return jsonify({
+            "message": "Reply added successfully",
+            "review": review.to_dict()
+        }), 200
 
     except SQLAlchemyError as exc:
         db.session.rollback()
@@ -3872,7 +3910,8 @@ def create_appointment_memo(appointment_id: int) -> tuple[dict[str, object], int
         from .models import AppointmentMemo, Appointment
         
         data = request.json or {}
-        content = data.get("content", "").strip()
+        # Accept either "content" or "memo_text"
+        content = (data.get("content") or data.get("memo_text") or "").strip()
         
         if not content:
             return jsonify({"error": "content_required"}), 400
@@ -3882,34 +3921,13 @@ def create_appointment_memo(appointment_id: int) -> tuple[dict[str, object], int
         if not appointment:
             return jsonify({"error": "appointment_not_found"}), 404
         
-        # Get current user
-        vendor_id = get_jwt_identity()
-        vendor = User.query.get(vendor_id)
-        if not vendor or vendor.role != "vendor":
-            return jsonify({"error": "unauthorized"}), 403
-        
-        # Verify vendor owns the salon
-        if appointment.salon.vendor_id != vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
-        
-        # Create memo
+        # Create memo (UC 1.12 - simple endpoint without auth)
         memo = AppointmentMemo(
             appointment_id=appointment_id,
-            vendor_id=vendor_id,
+            vendor_id=appointment.salon.vendor_id,  # Get vendor from salon
             content=content
         )
         db.session.add(memo)
-        db.session.commit()
-        
-        # Create notification for client
-        notification = Notification(
-            user_id=appointment.client_id,
-            title="Appointment Note",
-            message=f"You received a note from {appointment.salon.name}",
-            notification_type="appointment_memo",
-            related_id=appointment_id
-        )
-        db.session.add(notification)
         db.session.commit()
         
         return jsonify(memo.to_dict()), 201
@@ -4025,7 +4043,65 @@ def delete_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
 # UC 1.13 - View Daily Schedule
 # ============================================================================
 
-@bp.get("/staff/<int:staff_id>/schedule/<string:date>")
+@bp.get("/staff/<int:staff_id>/daily-schedule")
+def get_daily_schedule_simple(staff_id: int) -> tuple[dict[str, object], int]:
+    """Get daily schedule for a staff member (UC 1.13 - Simple version)."""
+    try:
+        from datetime import datetime
+        from .models import Staff, Appointment, TimeBlock
+        
+        # Get staff
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({"error": "staff_not_found"}), 404
+        
+        # Get date from query param
+        date_str = request.args.get("date")
+        if not date_str:
+            date_str = datetime.now().date().isoformat()
+        
+        # Parse date
+        try:
+            schedule_date = datetime.fromisoformat(date_str)
+        except ValueError:
+            return jsonify({"error": "invalid_date_format"}), 400
+        
+        # Get start and end of day
+        day_start = schedule_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = schedule_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get appointments for this staff member on this day
+        appointments = Appointment.query.filter(
+            Appointment.staff_id == staff_id,
+            Appointment.starts_at >= day_start,
+            Appointment.starts_at <= day_end
+        ).all()
+        
+        # Get time blocks (unavailable times)
+        time_blocks = TimeBlock.query.filter(
+            TimeBlock.staff_id == staff_id,
+            TimeBlock.starts_at >= day_start,
+            TimeBlock.ends_at <= day_end
+        ).all()
+        
+        salon = staff.salon
+        
+        return jsonify({
+            "date": date_str,
+            "staff_id": staff_id,
+            "staff_name": staff.user.name if staff.user else f"Staff {staff_id}",
+            "salon_id": salon.salon_id,
+            "salon_name": salon.name,
+            "appointments": [a.to_dict() if hasattr(a, 'to_dict') else {"id": a.appointment_id} for a in appointments],
+            "time_blocks": [t.to_dict() for t in time_blocks],
+            "total_appointments": len(appointments)
+        }), 200
+    
+    except Exception as exc:
+        current_app.logger.exception("Failed to get daily schedule", exc_info=exc)
+        return jsonify({"error": "schedule_retrieval_failed"}), 500
+
+
 def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object], int]:
     """Get daily schedule for a staff member (UC 1.13)."""
     try:
@@ -4073,11 +4149,11 @@ def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object
         }
         
         # Get time blocks (unavailable times)
-        from .models import StaffTimeBlock
-        time_blocks = StaffTimeBlock.query.filter(
-            StaffTimeBlock.staff_id == staff_id,
-            StaffTimeBlock.block_start >= day_start,
-            StaffTimeBlock.block_start <= day_end
+        from .models import TimeBlock
+        time_blocks = TimeBlock.query.filter(
+            TimeBlock.staff_id == staff_id,
+            TimeBlock.starts_at >= day_start,
+            TimeBlock.starts_at <= day_end
         ).all()
         
         return jsonify({
@@ -4104,8 +4180,8 @@ def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object
                 {
                     "id": block.block_id,
                     "reason": block.reason,
-                    "starts_at": block.block_start.isoformat(),
-                    "ends_at": block.block_end.isoformat()
+                    "starts_at": block.starts_at.isoformat(),
+                    "ends_at": block.ends_at.isoformat()
                 }
                 for block in time_blocks
             ]
@@ -4200,50 +4276,40 @@ def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str,
 
 @bp.post("/staff/<int:staff_id>/time-blocks")
 def create_time_block(staff_id: int) -> tuple[dict[str, object], int]:
-    """Create a time block to prevent bookings (UC 1.14)."""
+    """Create a time block to prevent bookings (UC 1.7)."""
     try:
         from datetime import datetime
-        from .models import Staff, StaffTimeBlock
+        from .models import Staff, TimeBlock
         
         data = request.json or {}
         reason = data.get("reason", "").strip()
-        block_start = data.get("block_start")
-        block_end = data.get("block_end")
+        starts_at = data.get("starts_at") or data.get("block_start")
+        ends_at = data.get("ends_at") or data.get("block_end")
         
-        if not reason or not block_start or not block_end:
-            return jsonify({"error": "missing_fields"}), 400
+        if not reason or not starts_at or not ends_at:
+            return jsonify({"error": "missing_fields", "message": "reason, starts_at (or block_start), and ends_at (or block_end) are required"}), 400
         
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
             return jsonify({"error": "staff_not_found"}), 404
         
-        # Get current user
-        vendor_id = get_jwt_identity()
-        user = User.query.get(vendor_id)
-        if not user or user.role != "vendor":
-            return jsonify({"error": "unauthorized"}), 403
-        
-        # Verify vendor owns the salon
-        if staff.salon.vendor_id != vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
-        
         # Parse dates
         try:
-            block_start_dt = datetime.fromisoformat(block_start)
-            block_end_dt = datetime.fromisoformat(block_end)
+            starts_at_dt = datetime.fromisoformat(starts_at)
+            ends_at_dt = datetime.fromisoformat(ends_at)
         except ValueError:
             return jsonify({"error": "invalid_date_format"}), 400
         
         # Validate dates
-        if block_start_dt >= block_end_dt:
+        if starts_at_dt >= ends_at_dt:
             return jsonify({"error": "invalid_time_range"}), 400
         
         # Create time block
-        time_block = StaffTimeBlock(
+        time_block = TimeBlock(
             staff_id=staff_id,
-            block_start=block_start_dt,
-            block_end=block_end_dt,
+            starts_at=starts_at_dt,
+            ends_at=ends_at_dt,
             reason=reason
         )
         db.session.add(time_block)
@@ -4259,28 +4325,18 @@ def create_time_block(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/staff/<int:staff_id>/time-blocks")
 def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, object], int]:
-    """Get all time blocks for a staff member (UC 1.14)."""
+    """Get all time blocks for a staff member (UC 1.7)."""
     try:
-        from .models import Staff, StaffTimeBlock
+        from .models import Staff, TimeBlock
         
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
             return jsonify({"error": "staff_not_found"}), 404
         
-        # Get current user
-        user_id = get_jwt_identity()
-        user = User.query.get(user_id)
-        
-        # Verify access
-        if user.role == "vendor" and staff.salon.vendor_id != user_id:
-            return jsonify({"error": "unauthorized"}), 403
-        elif user.role == "staff" and staff.user_id != user_id:
-            return jsonify({"error": "unauthorized"}), 403
-        
         # Get time blocks
-        time_blocks = StaffTimeBlock.query.filter_by(staff_id=staff_id).order_by(
-            StaffTimeBlock.block_start
+        time_blocks = TimeBlock.query.filter_by(staff_id=staff_id).order_by(
+            TimeBlock.starts_at
         ).all()
         
         return jsonify({
@@ -4295,48 +4351,38 @@ def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/time-blocks/<int:block_id>")
 def update_time_block(block_id: int) -> tuple[dict[str, object], int]:
-    """Update a time block (UC 1.14)."""
+    """Update a time block (UC 1.7)."""
     try:
         from datetime import datetime
-        from .models import StaffTimeBlock
+        from .models import TimeBlock
         
         data = request.json or {}
         reason = data.get("reason", "").strip()
-        block_start = data.get("block_start")
-        block_end = data.get("block_end")
+        starts_at = data.get("starts_at") or data.get("block_start")
+        ends_at = data.get("ends_at") or data.get("block_end")
         
-        if not reason or not block_start or not block_end:
+        if not reason or not starts_at or not ends_at:
             return jsonify({"error": "missing_fields"}), 400
         
         # Get time block
-        time_block = StaffTimeBlock.query.get(block_id)
+        time_block = TimeBlock.query.get(block_id)
         if not time_block:
             return jsonify({"error": "time_block_not_found"}), 404
         
-        # Get current user
-        vendor_id = get_jwt_identity()
-        user = User.query.get(vendor_id)
-        if not user or user.role != "vendor":
-            return jsonify({"error": "unauthorized"}), 403
-        
-        # Verify vendor owns the salon
-        if time_block.staff.salon.vendor_id != vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
-        
         # Parse dates
         try:
-            block_start_dt = datetime.fromisoformat(block_start)
-            block_end_dt = datetime.fromisoformat(block_end)
+            starts_at_dt = datetime.fromisoformat(starts_at)
+            ends_at_dt = datetime.fromisoformat(ends_at)
         except ValueError:
             return jsonify({"error": "invalid_date_format"}), 400
         
         # Validate dates
-        if block_start_dt >= block_end_dt:
+        if starts_at_dt >= ends_at_dt:
             return jsonify({"error": "invalid_time_range"}), 400
         
         # Update time block
-        time_block.block_start = block_start_dt
-        time_block.block_end = block_end_dt
+        time_block.starts_at = starts_at_dt
+        time_block.ends_at = ends_at_dt
         time_block.reason = reason
         db.session.commit()
         
@@ -4350,24 +4396,14 @@ def update_time_block(block_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/time-blocks/<int:block_id>")
 def delete_time_block(block_id: int) -> tuple[dict[str, object], int]:
-    """Delete a time block (UC 1.14)."""
+    """Delete a time block (UC 1.7)."""
     try:
-        from .models import StaffTimeBlock
+        from .models import TimeBlock
         
         # Get time block
-        time_block = StaffTimeBlock.query.get(block_id)
+        time_block = TimeBlock.query.get(block_id)
         if not time_block:
             return jsonify({"error": "time_block_not_found"}), 404
-        
-        # Get current user
-        vendor_id = get_jwt_identity()
-        user = User.query.get(vendor_id)
-        if not user or user.role != "vendor":
-            return jsonify({"error": "unauthorized"}), 403
-        
-        # Verify vendor owns the salon
-        if time_block.staff.salon.vendor_id != vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
         
         # Delete time block
         db.session.delete(time_block)
@@ -4386,7 +4422,7 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
     """Get time blocks for a specific date (UC 1.14)."""
     try:
         from datetime import datetime
-        from .models import Staff, StaffTimeBlock
+        from .models import Staff, TimeBlock
         
         # Get staff
         staff = Staff.query.get(staff_id)
@@ -4414,11 +4450,11 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
         day_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
         
         # Get time blocks for this day
-        time_blocks = StaffTimeBlock.query.filter(
-            StaffTimeBlock.staff_id == staff_id,
-            StaffTimeBlock.block_start >= day_start,
-            StaffTimeBlock.block_start <= day_end
-        ).order_by(StaffTimeBlock.block_start).all()
+        time_blocks = TimeBlock.query.filter(
+            TimeBlock.staff_id == staff_id,
+            TimeBlock.starts_at >= day_start,
+            TimeBlock.starts_at <= day_end
+        ).order_by(TimeBlock.starts_at).all()
         
         return jsonify({
             "staff_id": staff_id,
@@ -4446,15 +4482,18 @@ def get_salon_payments(salon_id: int) -> tuple[dict[str, object], int]:
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
-        # Get current user
+        # Get current user - must be authenticated
         vendor_id = get_jwt_identity()
+        if not vendor_id:
+            return jsonify({"error": "unauthorized", "message": "Authentication required"}), 401
+        
         user = User.query.get(vendor_id)
         if not user or user.role != "vendor":
-            return jsonify({"error": "unauthorized"}), 403
+            return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
         
         # Verify vendor owns the salon
         if salon.vendor_id != vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
+            return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
         # Get payments (appointments with status completed or no-show that were charged)
         appointments = Appointment.query.filter(
@@ -4831,6 +4870,85 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch customer visit history", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# Simple endpoints for UC 1.16 (without authentication)
+@bp.get("/customers/<int:client_id>/visit-history")
+def get_customer_visit_history_simple(client_id: int) -> tuple[dict[str, object], int]:
+    """Get visit history for a customer (UC 1.16 - Simple version)."""
+    try:
+        from .models import Appointment, User as UserModel
+        
+        # Get customer
+        client = User.query.get(client_id)
+        if not client:
+            return jsonify({"error": "customer_not_found"}), 404
+        
+        # Get all appointments for this customer
+        appointments = Appointment.query.filter(
+            Appointment.client_id == client_id
+        ).order_by(Appointment.created_at.desc()).all()
+        
+        # Build visit history
+        visits = []
+        total_spent = 0
+        
+        for apt in appointments:
+            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 0
+            if apt.status == "completed":
+                total_spent += service_price
+            
+            visits.append({
+                "appointment_id": apt.appointment_id,
+                "date": apt.created_at.isoformat(),
+                "salon": apt.salon.name if apt.salon else "Unknown",
+                "salon_id": apt.salon_id,
+                "service": apt.service.name if apt.service else "Unknown",
+                "staff": apt.staff.user.name if apt.staff and apt.staff.user else "Unknown",
+                "status": apt.status,
+                "amount_cents": service_price
+            })
+        
+        return jsonify({
+            "client_id": client_id,
+            "client_name": client.name,
+            "total_visits": len(appointments),
+            "total_spent_cents": total_spent,
+            "visits": visits
+        }), 200
+    
+    except Exception as exc:
+        current_app.logger.exception("Failed to get customer visit history", exc_info=exc)
+        return jsonify({"error": "retrieval_failed"}), 500
+
+
+@bp.get("/customers/<int:client_id>")
+def get_customer_simple(client_id: int) -> tuple[dict[str, object], int]:
+    """Get customer information (UC 1.16 - Simple version)."""
+    try:
+        client = User.query.get(client_id)
+        if not client:
+            return jsonify({"error": "customer_not_found"}), 404
+        
+        # Get appointment stats
+        from .models import Appointment
+        appointments = Appointment.query.filter_by(client_id=client_id).all()
+        completed = len([a for a in appointments if a.status == "completed"])
+        
+        return jsonify({
+            "id": client.user_id,
+            "name": client.name,
+            "email": client.email,
+            "phone": client.phone,
+            "role": client.role,
+            "total_appointments": len(appointments),
+            "completed_appointments": completed,
+            "created_at": client.created_at.isoformat() if client.created_at else None
+        }), 200
+    
+    except Exception as exc:
+        current_app.logger.exception("Failed to get customer", exc_info=exc)
+        return jsonify({"error": "retrieval_failed"}), 500
 
 
 @bp.get("/salons/<int:salon_id>/customers/stats")
@@ -6016,3 +6134,6 @@ def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
     except SQLAlchemyError as exc:
         current_app.logger.exception("Failed to fetch promotion analytics", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
