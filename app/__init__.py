@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
+from flasgger import Swagger  
 
 from .extensions import db
 from .routes import bp as api_bp
@@ -41,7 +42,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     CORS(app, resources={r"/*": {
         "origins": [
             "http://localhost:5173",
-            "http://localhost:5174", 
+            "http://localhost:5174",
             "http://localhost:5175",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
@@ -49,6 +50,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         ],
         "supports_credentials": True
     }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+    # INITIALIZE FLASGGER
+    app.config["SWAGGER"] = {
+        "title": "SalonHub API",
+        "uiversion": 3,
+        "version": "1.0.0",
+        "description": "API documentation for the CS-490 Team 7 backend.",
+    }
+    Swagger(app)
 
     db.init_app(app)
 

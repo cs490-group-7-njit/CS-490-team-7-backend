@@ -18,7 +18,21 @@ bp = Blueprint("api", __name__)
 
 @bp.get("/health")
 def health_check() -> tuple[dict[str, str], int]:
-    """Expose a simple uptime check endpoint."""
+    """
+    Expose a simple uptime check endpoint.
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Service is healthy and running.
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: ok
+    """
     return jsonify({"status": "ok"}), 200
 
 
