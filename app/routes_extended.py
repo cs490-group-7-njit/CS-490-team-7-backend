@@ -8,17 +8,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
 from .extensions import db
-from .models import (
-    Notification,
-    Message,
-    LoyaltyRedemption,
-    DiscountAlert,
-    Product,
-    ProductPurchase,
-    User,
-    Salon,
-    ClientLoyalty,
-)
+from .models import (ClientLoyalty, DiscountAlert, LoyaltyRedemption, Message,
+                     Notification, Product, ProductPurchase, Salon, User)
 
 bp_ext = Blueprint("api_ext", __name__)
 
@@ -26,7 +17,36 @@ bp_ext = Blueprint("api_ext", __name__)
 # UC 2.5 - NOTIFICATIONS
 @bp_ext.get("/users/<int:user_id>/notifications")
 def get_notifications(user_id: int) -> tuple[dict[str, object], int]:
-    """Get all notifications for a user with pagination."""
+    """Get all notifications for a user with pagination.
+    ---
+    tags:
+      - Notifications
+    parameters:
+      - name: user_id
+        in: path
+        type: integer
+        required: true
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: limit
+        in: query
+        type: integer
+        default: 20
+        maximum: 50
+      - name: unread_only
+        in: query
+        type: boolean
+        default: false
+    responses:
+      200:
+        description: List of notifications with pagination
+      400:
+        description: Invalid parameters
+      500:
+        description: Database error
+    """
     try:
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 20))))
@@ -70,7 +90,23 @@ def get_notifications(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp_ext.put("/notifications/<int:notification_id>/read")
 def mark_notification_read(notification_id: int) -> tuple[dict[str, object], int]:
-    """Mark a notification as read."""
+    """Mark a notification as read.
+    ---
+    tags:
+      - Notifications
+    parameters:
+      - name: notification_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Notification marked as read
+      404:
+        description: Notification not found
+      500:
+        description: Database error
+    """
     try:
         notification = Notification.query.get(notification_id)
         if not notification:
@@ -87,7 +123,22 @@ def mark_notification_read(notification_id: int) -> tuple[dict[str, object], int
 
 @bp_ext.put("/users/<int:user_id>/notifications/read-all")
 def mark_all_notifications_read(user_id: int) -> tuple[dict[str, object], int]:
-    """Mark all notifications as read for a user."""
+    """Mark all notifications as read for a user.
+    ---
+    tags:
+      - Notifications
+    parameters:
+      - in: path
+        name: user_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: All notifications marked as read
+      500:
+        description: Database error
+    """
     try:
         Notification.query.filter(Notification.user_id == user_id).update(
             {"is_read": True}
@@ -103,7 +154,29 @@ def mark_all_notifications_read(user_id: int) -> tuple[dict[str, object], int]:
 # UC 2.7 - MESSAGING
 @bp_ext.get("/users/<int:user_id>/messages")
 def get_messages(user_id: int) -> tuple[dict[str, object], int]:
-    """Get all messages for a user (sent or received)."""
+    """Get all messages for a user.
+    ---
+    tags:
+      - Messages
+    parameters:
+      - name: user_id
+        in: path
+        type: integer
+        required: true
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: limit
+        in: query
+        type: integer
+        default: 20
+    responses:
+      200:
+        description: List of messages
+      500:
+        description: Database error
+    """
     try:
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 20))))
@@ -145,7 +218,32 @@ def get_messages(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp_ext.post("/messages")
 def send_message() -> tuple[dict[str, object], int]:
-    """Send a message from client to vendor."""
+    """Send a new message.
+    ---
+    tags:
+      - Messages
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            recipient_id:
+              type: integer
+            content:
+              type: string
+          required:
+            - recipient_id
+            - content
+    responses:
+      201:
+        description: Message sent successfully
+      400:
+        description: Invalid payload
+      500:
+        description: Database error
+    """
     try:
         data = request.get_json()
         sender_id = data.get("sender_id")
@@ -201,8 +299,22 @@ def mark_message_read(message_id: int) -> tuple[dict[str, object], int]:
 
 # UC 2.13 - LOYALTY REDEMPTION
 @bp_ext.get("/users/<int:user_id>/loyalty/redemptions")
-def get_redemptions(user_id: int) -> tuple[dict[str, object], int]:
-    """Get all redemptions for a user."""
+def get_loyalty_redemptions(user_id: int) -> tuple[dict[str, object], int]:
+    """Get loyalty redemption history for a user.
+    ---
+    tags:
+      - Loyalty
+    parameters:
+      - name: user_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: List of redemptions
+      500:
+        description: Database error
+    """
     try:
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 20))))
@@ -254,8 +366,8 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
 
         discount_value_cents = points_to_redeem * 5  # 1 point = $0.05
 
-        import string
         import random
+        import string
 
         code = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
@@ -326,7 +438,23 @@ def dismiss_alert(alert_id: int) -> tuple[dict[str, object], int]:
 # UC 2.15 - PRODUCTS
 @bp_ext.get("/salons/<int:salon_id>/products")
 def get_salon_products(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all products for a salon."""
+    """Get products available at a salon.
+    ---
+    tags:
+      - Products
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: List of products
+      404:
+        description: Salon not found
+      500:
+        description: Database error
+    """
     try:
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 12))))
