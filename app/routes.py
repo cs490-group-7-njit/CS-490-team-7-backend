@@ -5,13 +5,16 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy import text, func
+from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
-from .models import AuthAccount, Salon, User, Staff, Service, Review, Appointment, ClientLoyalty, StaffRating, Notification, Message, LoyaltyRedemption, DiscountAlert, Product, ProductPurchase, Transaction
+from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
+                     LoyaltyRedemption, Message, Notification, Product,
+                     ProductPurchase, Review, Salon, Service, Staff,
+                     StaffRating, Transaction, User)
 
 bp = Blueprint("api", __name__)
 
@@ -38,7 +41,22 @@ def health_check() -> tuple[dict[str, str], int]:
 
 @bp.get("/db-health")
 def database_health() -> tuple[dict[str, str], int]:
-    """Check connectivity to the configured database."""
+    """Check connectivity to the configured database.
+    ---
+    tags:
+      - Health
+    responses:
+      200:
+        description: Database connection is ok.
+        schema:
+          type: object
+          properties:
+            database:
+              type: string
+              example: ok
+      500:
+        description: Database connection failed.
+    """
     try:
         db.session.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
@@ -51,15 +69,48 @@ def database_health() -> tuple[dict[str, str], int]:
 @bp.get("/salons")
 def list_salons() -> tuple[dict[str, object], int]:
     """Return a list of published salons with search/filter support (UC 2.7).
-    
-    Query Parameters:
-    - query: Search by salon name (partial match, case-insensitive)
-    - city: Filter by city (exact match)
-    - business_type: Filter by business type (exact match)
-    - sort: Sort field (name, created_at) - default: created_at
-    - order: Sort order (asc, desc) - default: desc
-    - page: Page number (default: 1)
-    - limit: Results per page (default: 12, max: 50)
+    ---
+    tags:
+      - Salons
+    parameters:
+      - name: query
+        in: query
+        type: string
+        description: Search by salon name (partial match, case-insensitive)
+      - name: city
+        in: query
+        type: string
+        description: Filter by city
+      - name: business_type
+        in: query
+        type: string
+        description: Filter by business type
+      - name: sort
+        in: query
+        type: string
+        enum: [name, created_at]
+        default: created_at
+      - name: order
+        in: query
+        type: string
+        enum: [asc, desc]
+        default: desc
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: limit
+        in: query
+        type: integer
+        default: 12
+        maximum: 50
+    responses:
+      200:
+        description: List of salons with pagination metadata
+      400:
+        description: Invalid parameters
+      500:
+        description: Database error
     """
     try:
         # Get query parameters
@@ -140,7 +191,23 @@ def list_salons() -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>")
 def get_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get full salon details including services and staff (UC 2.6)."""
+    """Get full salon details including services and staff (UC 2.6).
+    ---
+    tags:
+      - Salons
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Salon details with services and staff
+      404:
+        description: Salon not found
+      500:
+        description: Database error
+    """
     try:
         # Fetch salon with vendor details
         salon = (
@@ -180,7 +247,18 @@ def get_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.post("/salons")
 def create_salon() -> tuple[dict[str, object], int]:
-    """Create a new salon entry (restricted to authenticated vendors)."""
+    """Create a new salon entry (restricted to authenticated vendors).
+    ---
+    tags:
+      - Salons
+    responses:
+      201:
+        description: Salon created successfully
+      400:
+        description: Invalid payload
+      500:
+        description: Server error
+    """
     payload = request.get_json(silent=True) or {}
 
     # Extract required and optional fields
@@ -244,7 +322,23 @@ def create_salon() -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>")
 def update_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
-    """Update salon details (for vendors managing their salon)."""
+    """Update salon details (for vendors managing their salon).
+    ---
+    tags:
+      - Salons
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Salon updated successfully
+      404:
+        description: Salon not found
+      500:
+        description: Server error
+    """
     payload = request.get_json(silent=True) or {}
 
     # Extract fields that can be updated
@@ -306,7 +400,31 @@ def update_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.post("/salons/<int:salon_id>/verification")
 def submit_for_verification_post(salon_id: int):
-    """Vendor submits their salon for verification (UC 1.5)."""
+    """Vendor submits their salon for verification (UC 1.5).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     salon = Salon.query.get(salon_id)
     if not salon:
         return jsonify({"error": "not_found", "message": "Salon not found"}), 404
@@ -329,7 +447,30 @@ def submit_for_verification_post(salon_id: int):
 
 @bp.put("/salons/<int:salon_id>/verify")
 def submit_for_verification(salon_id: int):
-    """Vendor submits their salon for verification (alternative endpoint)."""
+    """Vendor submits their salon for verification (alternative endpoint).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     payload = request.get_json(silent=True) or {}
     business_tin = (payload.get("business_tin") or "").strip()
 
@@ -361,7 +502,40 @@ def submit_for_verification(salon_id: int):
 
 @bp.post("/auth/register")
 def register_user() -> tuple[dict[str, object], int]:
-    """Register a new client or vendor user."""
+    """Register a new client or vendor user.
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+            password:
+              type: string
+            role:
+              type: string
+              enum: [client, vendor]
+            phone:
+              type: string
+          required:
+            - name
+            - email
+            - password
+    responses:
+      201:
+        description: User registered successfully
+      400:
+        description: Invalid payload or email already exists
+      500:
+        description: Server error
+    """
     payload = request.get_json(silent=True) or {}
 
     # Extract and validate required fields
@@ -421,7 +595,20 @@ def register_user() -> tuple[dict[str, object], int]:
 
 @bp.get("/users/verify")
 def verify_user() -> tuple[dict[str, object], int]:
-    """Check if a user exists by email and return basic details."""
+    """Check if a user exists by email and return basic details.
+        ---
+        tags:
+          - Users
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     email = (request.args.get("email") or "").strip().lower()
 
     if not email:
@@ -463,7 +650,34 @@ def get_jwt_identity() -> int | None:
 
 @bp.post("/auth/login")
 def login() -> tuple[dict[str, object], int]:
-    """Authenticate a user by email/password and return an access token."""
+    """Authenticate a user by email/password and return an access token.
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          required:
+            - email
+            - password
+    responses:
+      200:
+        description: Login successful, returns access token
+      400:
+        description: Invalid email or password
+      401:
+        description: Unauthorized
+      500:
+        description: Server error
+    """
     payload = request.get_json(silent=True) or {}
 
     email = (payload.get("email") or "").strip().lower()
@@ -514,7 +728,23 @@ def login() -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/staff")
 def list_staff(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Get all staff members for a specific salon."""
+    """Get all staff members for a specific salon.
+    ---
+    tags:
+      - Staff
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: List of staff members
+      404:
+        description: Salon not found
+      500:
+        description: Server error
+    """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -531,7 +761,35 @@ def list_staff(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
 
 @bp.post("/salons/<int:salon_id>/staff")
 def create_staff(salon_id: int) -> tuple[dict[str, object], int]:
-    """Create a new staff member for a salon."""
+    """Create a new staff member for a salon.
+    ---
+    tags:
+      - Staff
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            title:
+              type: string
+            user_id:
+              type: integer
+    responses:
+      201:
+        description: Staff member created successfully
+      400:
+        description: Invalid input
+      404:
+        description: Salon not found
+      500:
+        description: Database error
+    """
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
 
@@ -565,7 +823,40 @@ def create_staff(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>/staff/<int:staff_id>")
 def update_staff(salon_id: int, staff_id: int) -> tuple[dict[str, object], int]:
-    """Update a staff member."""
+    """Update a staff member.
+    ---
+    tags:
+      - Staff
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            title:
+              type: string
+            user_id:
+              type: integer
+    responses:
+      200:
+        description: Staff member updated successfully
+      400:
+        description: Invalid input
+      404:
+        description: Staff member not found
+      500:
+        description: Database error
+    """
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
 
@@ -596,7 +887,29 @@ def update_staff(salon_id: int, staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/salons/<int:salon_id>/staff/<int:staff_id>")
 def delete_staff(salon_id: int, staff_id: int) -> tuple[dict[str, str], int]:
-    """Delete a staff member."""
+    """Delete a staff member.
+    ---
+    tags:
+      - Staff
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: Staff member deleted successfully
+      404:
+        description: Staff member not found
+      500:
+        description: Database error
+    """
     try:
         staff = Staff.query.filter_by(staff_id=staff_id, salon_id=salon_id).first()
         if not staff:
@@ -615,7 +928,38 @@ def delete_staff(salon_id: int, staff_id: int) -> tuple[dict[str, str], int]:
 
 @bp.put("/salons/<int:salon_id>/staff/<int:staff_id>/schedule")
 def update_staff_schedule(salon_id: int, staff_id: int) -> tuple[dict[str, object], int]:
-    """Update a staff member's schedule."""
+    """Update a staff member's schedule.
+    ---
+    tags:
+      - Staff
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            schedule:
+              type: object
+    responses:
+      200:
+        description: Staff schedule updated successfully
+      400:
+        description: Invalid input
+      404:
+        description: Staff member not found
+      500:
+        description: Database error
+    """
     payload = request.get_json(silent=True) or {}
     schedule = payload.get("schedule")
 
@@ -647,7 +991,24 @@ def update_staff_schedule(salon_id: int, staff_id: int) -> tuple[dict[str, objec
 
 @bp.get("/staff/<int:staff_id>/schedules")
 def get_staff_schedules(staff_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Get all weekly schedules for a staff member."""
+    """Get all weekly schedules for a staff member.
+    ---
+    tags:
+      - Staff Schedules
+    parameters:
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: List of schedules
+      404:
+        description: Staff member not found
+      500:
+        description: Database error
+    """
     try:
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -665,7 +1026,35 @@ def get_staff_schedules(staff_id: int) -> tuple[dict[str, list[dict[str, object]
 
 @bp.post("/staff/<int:staff_id>/schedules")
 def create_staff_schedule(staff_id: int) -> tuple[dict[str, object], int]:
-    """Create a new weekly schedule entry for a staff member."""
+    """Create a new weekly schedule entry for a staff member.
+    ---
+    tags:
+      - Staff Schedules
+    parameters:
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            day_of_week:
+              type: integer
+            start_time:
+              type: string
+            end_time:
+              type: string
+    responses:
+      201:
+        description: Schedule created successfully
+      400:
+        description: Invalid input
+      500:
+        description: Database error
+    """
     payload = request.get_json(silent=True) or {}
     day_of_week = payload.get("day_of_week")
     start_time = payload.get("start_time")
@@ -686,6 +1075,7 @@ def create_staff_schedule(staff_id: int) -> tuple[dict[str, object], int]:
             return jsonify({"error": "not_found", "message": "Staff member not found"}), 404
 
         from datetime import datetime
+
         from .models import Schedule
 
         # Parse time strings (format: "HH:MM")
@@ -719,7 +1109,41 @@ def create_staff_schedule(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/staff/<int:staff_id>/schedules/<int:schedule_id>")
 def update_weekly_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, object], int]:
-    """Update a weekly schedule entry for a staff member."""
+    """Update a weekly schedule entry for a staff member.
+    ---
+    tags:
+      - Staff Schedules
+    parameters:
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: schedule_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        schema:
+          properties:
+            day_of_week:
+              type: integer
+            start_time:
+              type: string
+            end_time:
+              type: string
+    responses:
+      200:
+        description: Schedule updated successfully
+      400:
+        description: Invalid input
+      404:
+        description: Schedule not found
+      500:
+        description: Database error
+    """
     payload = request.get_json(silent=True) or {}
     day_of_week = payload.get("day_of_week")
     start_time = payload.get("start_time")
@@ -727,6 +1151,7 @@ def update_weekly_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, o
 
     try:
         from datetime import datetime
+
         from .models import Schedule
 
         schedule = Schedule.query.filter_by(schedule_id=schedule_id, staff_id=staff_id).first()
@@ -761,7 +1186,29 @@ def update_weekly_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, o
 
 @bp.delete("/staff/<int:staff_id>/schedules/<int:schedule_id>")
 def delete_staff_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, str], int]:
-    """Delete a weekly schedule entry for a staff member."""
+    """Delete a weekly schedule entry for a staff member.
+    ---
+    tags:
+      - Staff Schedules
+    parameters:
+      - in: path
+        name: staff_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: schedule_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: Schedule deleted successfully
+      404:
+        description: Schedule not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Schedule
 
@@ -787,7 +1234,23 @@ def delete_staff_schedule(staff_id: int, schedule_id: int) -> tuple[dict[str, st
 
 @bp.get("/salons/<int:salon_id>/services")
 def list_services(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Get all services for a salon."""
+    """Get all services for a salon.
+    ---
+    tags:
+      - Services
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: List of services for the salon
+      404:
+        description: Salon not found
+      500:
+        description: Server error
+    """
     try:
         from .models import Service
 
@@ -807,7 +1270,39 @@ def list_services(salon_id: int) -> tuple[dict[str, list[dict[str, object]]], in
 
 @bp.post("/salons/<int:salon_id>/services")
 def create_service(salon_id: int) -> tuple[dict[str, object], int]:
-    """Create a new service for a salon (vendor only)."""
+    """Create a new service for a salon (vendor only).
+    ---
+    tags:
+      - Services
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+            price_cents:
+              type: integer
+            duration_minutes:
+              type: integer
+    responses:
+      201:
+        description: Service created successfully
+      400:
+        description: Invalid input
+      404:
+        description: Salon not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Service
 
@@ -870,7 +1365,43 @@ def create_service(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>/services/<int:service_id>")
 def update_service(salon_id: int, service_id: int) -> tuple[dict[str, object], int]:
-    """Update a service for a salon (vendor only)."""
+    """Update a service for a salon (vendor only).
+    ---
+    tags:
+      - Services
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: service_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        schema:
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+            price_cents:
+              type: integer
+            duration_minutes:
+              type: integer
+    responses:
+      200:
+        description: Service updated successfully
+      400:
+        description: Invalid input
+      404:
+        description: Service not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Service
 
@@ -924,7 +1455,31 @@ def update_service(salon_id: int, service_id: int) -> tuple[dict[str, object], i
 
 @bp.delete("/salons/<int:salon_id>/services/<int:service_id>")
 def delete_service(salon_id: int, service_id: int) -> tuple[dict[str, str], int]:
-    """Delete a service from a salon (vendor only)."""
+    """Delete a service from a salon (vendor only).
+        ---
+        tags:
+          - Services
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: service_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Service
 
@@ -949,7 +1504,16 @@ def delete_service(salon_id: int, service_id: int) -> tuple[dict[str, str], int]
 
 @bp.get("/appointments")
 def list_appointments() -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Get all appointments for the authenticated user (client or vendor)."""
+    """Get all appointments for the authenticated user (client or vendor).
+    ---
+    tags:
+      - Appointments
+    responses:
+      200:
+        description: List of appointments
+      500:
+        description: Server error
+    """
     try:
         from .models import Appointment
 
@@ -974,10 +1538,48 @@ def list_appointments() -> tuple[dict[str, list[dict[str, object]]], int]:
 
 @bp.post("/appointments")
 def create_appointment() -> tuple[dict[str, object], int]:
-    """Create a new appointment."""
+    """Create a new appointment.
+    ---
+    tags:
+      - Appointments
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            salon_id:
+              type: integer
+            staff_id:
+              type: integer
+            service_id:
+              type: integer
+            client_id:
+              type: integer
+            starts_at:
+              type: string
+              format: date-time
+            notes:
+              type: string
+          required:
+            - salon_id
+            - staff_id
+            - service_id
+            - client_id
+            - starts_at
+    responses:
+      201:
+        description: Appointment created successfully
+      400:
+        description: Invalid payload
+      500:
+        description: Server error
+    """
     try:
         from datetime import datetime as dt
-        from .models import Appointment, Staff, Service
+
+        from .models import Appointment, Service, Staff
 
         payload = request.get_json(silent=True) or {}
 
@@ -1076,9 +1678,34 @@ def create_appointment() -> tuple[dict[str, object], int]:
 
 @bp.put("/appointments/<int:appointment_id>")
 def update_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Update an appointment."""
+    """Update an appointment.
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from datetime import datetime as dt, timedelta
+        from datetime import datetime as dt
+        from datetime import timedelta
+
         from .models import Appointment, Service
 
         payload = request.get_json(silent=True) or {}
@@ -1130,7 +1757,26 @@ def update_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/appointments/<int:appointment_id>")
 def get_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], int]:
-    """Get appointment details with related information."""
+    """Get appointment details with related information.
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Appointment
 
@@ -1189,9 +1835,40 @@ def get_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], 
 
 @bp.put("/appointments/<int:appointment_id>/reschedule")
 def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, object]], int]:
-    """Reschedule an appointment to a new date/time with conflict checking."""
+    """Reschedule an appointment to a new date/time with conflict checking.
+    ---
+    tags:
+      - Appointments
+    parameters:
+      - in: path
+        name: appointment_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            starts_at:
+              type: string
+              format: date-time
+    responses:
+      200:
+        description: Appointment rescheduled successfully
+      400:
+        description: Invalid input or cannot reschedule
+      404:
+        description: Appointment not found
+      409:
+        description: Time slot conflict
+      500:
+        description: Database error
+    """
     try:
-        from datetime import datetime as dt, timedelta
+        from datetime import datetime as dt
+        from datetime import timedelta
+
         from .models import Appointment, Staff, TimeBlock
 
         appointment = Appointment.query.get(appointment_id)
@@ -1322,7 +1999,26 @@ def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, obj
 
 @bp.delete("/appointments/<int:appointment_id>")
 def delete_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Cancel an appointment by setting status to 'cancelled'."""
+    """Cancel an appointment by setting status to 'cancelled'.
+    ---
+    tags:
+      - Appointments
+    parameters:
+      - in: path
+        name: appointment_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: Appointment cancelled successfully
+      400:
+        description: Cannot cancel completed or no-show appointments
+      404:
+        description: Appointment not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Appointment
 
@@ -1355,10 +2051,31 @@ def delete_appointment(appointment_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/staff/<int:staff_id>/availability")
 def check_staff_availability(staff_id: int) -> tuple[dict[str, object], int]:
-    """Check available time slots for a staff member on a given date."""
+    """Check available time slots for a staff member on a given date.
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from datetime import datetime as dt, timedelta, time
-        from .models import Staff, Schedule, TimeBlock, Appointment
+        from datetime import datetime as dt
+        from datetime import time, timedelta
+
+        from .models import Appointment, Schedule, Staff, TimeBlock
 
         # Get query parameters
         date_str = request.args.get("date")
@@ -1454,7 +2171,26 @@ def check_staff_availability(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/appointments")
 def list_salon_appointments(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all appointments for a specific salon (vendor view)."""
+    """Get all appointments for a specific salon (vendor view).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Appointment, Salon
 
@@ -1478,7 +2214,8 @@ def list_salon_appointments(salon_id: int) -> tuple[dict[str, object], int]:
         # Filter by date if provided
         if date_str:
             try:
-                from datetime import datetime as dt, date as date_type
+                from datetime import date as date_type
+                from datetime import datetime as dt
 
                 date_obj = dt.strptime(date_str, "%Y-%m-%d").date()
                 next_day = date_type.today() if date_obj == date_type.today() else date_obj
@@ -1508,6 +2245,32 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
     
     When appointment is marked as 'completed', automatically award loyalty points
     to the client based on the service cost (1 point per dollar).
+    ---
+    tags:
+      - Appointments
+    parameters:
+      - in: path
+        name: appointment_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            status:
+              type: string
+              enum: [booked, completed, cancelled, no-show]
+    responses:
+      200:
+        description: Appointment status updated successfully
+      400:
+        description: Invalid status
+      404:
+        description: Appointment not found
+      500:
+        description: Database error
     """
     try:
         from .models import Appointment, ClientLoyalty
@@ -1631,13 +2394,45 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
 @bp.get("/salons/<int:salon_id>/reviews")
 def get_salon_reviews(salon_id: int) -> tuple[dict[str, object], int]:
     """Get reviews for a salon with filtering, sorting, and pagination (UC 2.9).
-    
-    Query Parameters:
-    - sort_by: 'rating' or 'date' (default: 'date')
-    - order: 'asc' or 'desc' (default: 'desc')
-    - min_rating: Filter reviews by minimum rating (1-5, optional)
-    - limit: Max reviews to return (default: 50, max: 100)
-    - offset: Pagination offset (default: 0)
+    ---
+    tags:
+      - Reviews
+    parameters:
+      - name: salon_id
+        in: path
+        type: integer
+        required: true
+      - name: sort_by
+        in: query
+        type: string
+        enum: [rating, date]
+        default: date
+      - name: order
+        in: query
+        type: string
+        enum: [asc, desc]
+        default: desc
+      - name: min_rating
+        in: query
+        type: integer
+        minimum: 1
+        maximum: 5
+      - name: limit
+        in: query
+        type: integer
+        default: 50
+        maximum: 100
+      - name: offset
+        in: query
+        type: integer
+        default: 0
+    responses:
+      200:
+        description: List of reviews for the salon
+      404:
+        description: Salon not found
+      500:
+        description: Server error
     """
     try:
         # Check if salon exists
@@ -1714,7 +2509,37 @@ def get_salon_reviews(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.post("/salons/<int:salon_id>/reviews")
 def create_review(salon_id: int) -> tuple[dict[str, object], int]:
-    """Create a new review for a salon (UC 2.8)."""
+    """Create a new review for a salon (UC 2.8).
+    ---
+    tags:
+      - Reviews
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            rating:
+              type: integer
+              minimum: 1
+              maximum: 5
+            review_text:
+              type: string
+    responses:
+      201:
+        description: Review created successfully
+      400:
+        description: Invalid input
+      404:
+        description: Salon not found
+      500:
+        description: Database error
+    """
     try:
         payload = request.get_json(silent=True) or {}
 
@@ -1773,7 +2598,30 @@ def create_review(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/reviews/<int:review_id>")
 def update_review(review_id: int) -> tuple[dict[str, object], int]:
-    """Update an existing review (UC 2.8)."""
+    """Update an existing review (UC 2.8).
+        ---
+        tags:
+          - Reviews
+        parameters:
+          - in: path
+            name: review_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         review = Review.query.get(review_id)
         if not review:
@@ -1811,7 +2659,26 @@ def update_review(review_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/reviews/<int:review_id>")
 def delete_review(review_id: int) -> tuple[dict[str, str], int]:
-    """Delete a review (UC 2.8)."""
+    """Delete a review (UC 2.8).
+        ---
+        tags:
+          - Reviews
+        parameters:
+          - in: path
+            name: review_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         review = Review.query.get(review_id)
         if not review:
@@ -1833,7 +2700,31 @@ def delete_review(review_id: int) -> tuple[dict[str, str], int]:
 
 @bp.post("/reviews/<int:review_id>/reply")
 def add_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
-    """Vendor submits a reply to a client review (UC 1.11)."""
+    """Vendor submits a reply to a client review (UC 1.11).
+        ---
+        tags:
+          - Reviews
+        parameters:
+          - in: path
+            name: review_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         review = Review.query.get(review_id)
         if not review:
@@ -1885,7 +2776,30 @@ def add_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/reviews/<int:review_id>/reply")
 def update_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
-    """Vendor updates their reply to a review (UC 1.11)."""
+    """Vendor updates their reply to a review (UC 1.11).
+        ---
+        tags:
+          - Reviews
+        parameters:
+          - in: path
+            name: review_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         review = Review.query.get(review_id)
         if not review:
@@ -1943,7 +2857,26 @@ def update_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/reviews/<int:review_id>/reply")
 def delete_vendor_reply(review_id: int) -> tuple[dict[str, object], int]:
-    """Vendor deletes their reply to a review (UC 1.11)."""
+    """Vendor deletes their reply to a review (UC 1.11).
+        ---
+        tags:
+          - Reviews
+        parameters:
+          - in: path
+            name: review_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         review = Review.query.get(review_id)
         if not review:
@@ -2045,10 +2978,29 @@ def get_salon_reviews_with_replies(salon_id: int) -> tuple[dict[str, object], in
 
 @bp.get("/users/<int:user_id>/loyalty")
 def get_user_loyalty(user_id: int) -> tuple[dict[str, object], int]:
-    """Get loyalty points summary for a user across all salons (UC 2.10)."""
+    """Get loyalty points summary for a user across all salons (UC 2.10).
+        ---
+        tags:
+          - Users
+        parameters:
+          - in: path
+            name: user_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import ClientLoyalty
-        
+
         # Verify user exists
         user = User.query.get(user_id)
         if not user:
@@ -2087,10 +3039,41 @@ def get_user_loyalty(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/users/<int:user_id>/appointments/history")
 def get_appointment_history(user_id: int) -> tuple[dict[str, object], int]:
-    """Get appointment history for a user (UC 2.11)."""
+    """Get appointment history for a user (UC 2.11).
+    ---
+    tags:
+      - Appointments
+    parameters:
+      - in: path
+        name: user_id
+        required: true
+        schema:
+          type: integer
+      - in: query
+        name: status
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          type: integer
+          default: 50
+      - in: query
+        name: offset
+        schema:
+          type: integer
+          default: 0
+    responses:
+      200:
+        description: Appointment history retrieved
+      404:
+        description: User not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Appointment
-        
+
         # Verify user exists
         user = User.query.get(user_id)
         if not user:
@@ -2155,7 +3138,30 @@ def get_appointment_history(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/users/<int:user_id>")
 def update_user_profile(user_id: int) -> tuple[dict[str, object], int]:
-    """Update user profile information (UC 2.17)."""
+    """Update user profile information (UC 2.17).
+    ---
+    tags:
+      - Users
+    parameters:
+      - in: path
+        name: user_id
+        required: true
+        schema:
+          type: integer
+      - in: body
+        name: body
+        schema:
+          type: object
+    responses:
+      200:
+        description: Profile updated successfully
+      400:
+        description: Invalid input
+      404:
+        description: User not found
+      500:
+        description: Database error
+    """
     try:
         from .models import AuthAccount
         
@@ -2216,7 +3222,36 @@ def update_user_profile(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp.post("/users/<int:user_id>/favorites/<int:salon_id>")
 def add_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object], int]:
-    """Add a salon to user's favorites (UC 2.20)."""
+    """Add a salon to user's favorites (UC 2.20).
+        ---
+        tags:
+          - Favorites
+        parameters:
+          - in: path
+            name: user_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         user = User.query.get(user_id)
         if not user:
@@ -2246,7 +3281,31 @@ def add_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object], 
 
 @bp.delete("/users/<int:user_id>/favorites/<int:salon_id>")
 def remove_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object], int]:
-    """Remove a salon from user's favorites (UC 2.20)."""
+    """Remove a salon from user's favorites (UC 2.20).
+        ---
+        tags:
+          - Favorites
+        parameters:
+          - in: path
+            name: user_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         user = User.query.get(user_id)
         if not user:
@@ -2272,7 +3331,32 @@ def remove_favorite_salon(user_id: int, salon_id: int) -> tuple[dict[str, object
 
 @bp.get("/users/<int:user_id>/favorites")
 def get_favorite_salons(user_id: int) -> tuple[dict[str, object], int]:
-    """Get all favorite salons for a user (UC 2.20)."""
+    """Get all favorite salons for a user (UC 2.20).
+    ---
+    tags:
+      - Favorites
+    parameters:
+      - name: user_id
+        in: path
+        type: integer
+        required: true
+      - name: page
+        in: query
+        type: integer
+        default: 1
+      - name: limit
+        in: query
+        type: integer
+        default: 20
+        maximum: 50
+    responses:
+      200:
+        description: List of favorite salons
+      404:
+        description: User not found
+      500:
+        description: Server error
+    """
     try:
         user = User.query.get(user_id)
         if not user:
@@ -2323,7 +3407,26 @@ def get_favorite_salons(user_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/is-favorite")
 def check_if_favorite(salon_id: int) -> tuple[dict[str, object], int]:
-    """Check if a salon is favorited by the current user (UC 2.20)."""
+    """Check if a salon is favorited by the current user (UC 2.20).
+        ---
+        tags:
+          - Favorites
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get user_id from auth context (assuming JWT token has user info)
         user_id = request.args.get("user_id", type=int)
@@ -2356,7 +3459,26 @@ def check_if_favorite(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/analytics")
 def get_salon_analytics(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get performance analytics for a salon (UC 2.15)."""
+    """Get performance analytics for a salon (UC 2.15).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -2509,14 +3631,39 @@ def verify_salon(salon_id: int) -> tuple[dict[str, object], int]:
 @bp.get("/admin/salons")
 def get_all_salons() -> tuple[dict[str, object], int]:
     """Get all salons with activity metrics (admin only).
-
-    Query Parameters:
-    - status: Filter by verification status (pending, approved, rejected)
-    - business_type: Filter by business type
-    - sort_by: Sort by field (created_at, name, verification_status)
-    - order: Sort order (asc, desc)
-    - limit: Results per page (default: 50, max: 100)
-    - offset: Pagination offset (default: 0)
+    ---
+    tags:
+      - Admin
+    parameters:
+      - name: status
+        in: query
+        type: string
+        enum: [pending, approved, rejected]
+      - name: business_type
+        in: query
+        type: string
+      - name: sort_by
+        in: query
+        type: string
+        enum: [created_at, name, verification_status]
+      - name: order
+        in: query
+        type: string
+        enum: [asc, desc]
+      - name: limit
+        in: query
+        type: integer
+        default: 50
+        maximum: 100
+      - name: offset
+        in: query
+        type: integer
+        default: 0
+    responses:
+      200:
+        description: List of all salons with metrics
+      500:
+        description: Server error
     """
     try:
         from datetime import datetime, timedelta, timezone
@@ -2868,8 +4015,8 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
     Returns: time-series data for users, salons, appointments, and revenue trends.
     """
     try:
-        from datetime import datetime, timedelta, timezone
         import calendar
+        from datetime import datetime, timedelta, timezone
 
         # Get date range (last 12 months)
         end_date = datetime.now(timezone.utc)
@@ -3457,9 +4604,9 @@ def generate_reports() -> tuple[dict[str, object], int]:
     - period: '7d', '30d', '90d', '1y' (default: 30d)
     """
     try:
-        from datetime import datetime, timedelta
         import csv
         import io
+        from datetime import datetime, timedelta
 
         # Get query parameters
         report_type = request.args.get('report_type', 'summary')
@@ -3798,9 +4945,9 @@ def get_platform_health() -> tuple[dict[str, object], int]:
     - Active connections and resource usage
     """
     try:
-        from datetime import datetime, timedelta, timezone
         import time
-        
+        from datetime import datetime, timedelta, timezone
+
         # Start timing
         start_time = time.time()
         now = datetime.now(timezone.utc)
@@ -3969,7 +5116,20 @@ def get_platform_health() -> tuple[dict[str, object], int]:
 
 @bp.get("/admin/health/uptime")
 def get_uptime_history() -> tuple[dict[str, object], int]:
-    """Get detailed uptime and incident history (UC 3.11)."""
+    """Get detailed uptime and incident history (UC 3.11).
+        ---
+        tags:
+          - Admin
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime, timedelta, timezone
         
@@ -4039,7 +5199,20 @@ def get_uptime_history() -> tuple[dict[str, object], int]:
 
 @bp.get("/admin/health/alerts")
 def get_health_alerts() -> tuple[dict[str, object], int]:
-    """Get active health alerts and warnings (UC 3.11)."""
+    """Get active health alerts and warnings (UC 3.11).
+        ---
+        tags:
+          - Admin
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime, timezone
         
@@ -4103,9 +5276,33 @@ def get_health_alerts() -> tuple[dict[str, object], int]:
 
 @bp.post("/appointments/<int:appointment_id>/memos")
 def create_appointment_memo(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Vendor creates a memo/note for an appointment (UC 1.12)."""
+    """Vendor creates a memo/note for an appointment (UC 1.12).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import AppointmentMemo, Appointment
+        from .models import Appointment, AppointmentMemo
         
         data = request.json or {}
         # Accept either "content" or "memo_text"
@@ -4138,10 +5335,29 @@ def create_appointment_memo(appointment_id: int) -> tuple[dict[str, object], int
 
 @bp.get("/appointments/<int:appointment_id>/memos")
 def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Get all memos for an appointment (UC 1.12)."""
+    """Get all memos for an appointment (UC 1.12).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import AppointmentMemo, Appointment
-        
+        from .models import Appointment, AppointmentMemo
+
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -4174,7 +5390,30 @@ def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/memos/<int:memo_id>")
 def update_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
-    """Vendor updates a memo (UC 1.12)."""
+    """Vendor updates a memo (UC 1.12).
+        ---
+        tags:
+          - Memos
+        parameters:
+          - in: path
+            name: memo_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import AppointmentMemo
         
@@ -4208,10 +5447,29 @@ def update_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/memos/<int:memo_id>")
 def delete_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
-    """Vendor deletes a memo (UC 1.12)."""
+    """Vendor deletes a memo (UC 1.12).
+        ---
+        tags:
+          - Memos
+        parameters:
+          - in: path
+            name: memo_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import AppointmentMemo
-        
+
         # Get memo
         memo = AppointmentMemo.query.get(memo_id)
         if not memo:
@@ -4243,11 +5501,31 @@ def delete_appointment_memo(memo_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/staff/<int:staff_id>/daily-schedule")
 def get_daily_schedule_simple(staff_id: int) -> tuple[dict[str, object], int]:
-    """Get daily schedule for a staff member (UC 1.13 - Simple version)."""
+    """Get daily schedule for a staff member (UC 1.13 - Simple version).
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime
-        from .models import Staff, Appointment, TimeBlock
-        
+
+        from .models import Appointment, Staff, TimeBlock
+
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -4304,8 +5582,9 @@ def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object
     """Get daily schedule for a staff member (UC 1.13)."""
     try:
         from datetime import datetime
-        from .models import Staff, Appointment
-        
+
+        from .models import Appointment, Staff
+
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -4392,11 +5671,36 @@ def get_staff_daily_schedule(staff_id: int, date: str) -> tuple[dict[str, object
 
 @bp.get("/staff/<int:staff_id>/schedule/week/<string:start_date>")
 def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str, object], int]:
-    """Get weekly schedule for a staff member (UC 1.13)."""
+    """Get weekly schedule for a staff member (UC 1.13).
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: start_date
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime, timedelta
-        from .models import Staff, Appointment
-        
+
+        from .models import Appointment, Staff
+
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -4474,9 +5778,34 @@ def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str,
 
 @bp.post("/staff/<int:staff_id>/time-blocks")
 def create_time_block(staff_id: int) -> tuple[dict[str, object], int]:
-    """Create a time block to prevent bookings (UC 1.7)."""
+    """Create a time block to prevent bookings (UC 1.7).
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime
+
         from .models import Staff, TimeBlock
         
         data = request.json or {}
@@ -4523,10 +5852,29 @@ def create_time_block(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/staff/<int:staff_id>/time-blocks")
 def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, object], int]:
-    """Get all time blocks for a staff member (UC 1.7)."""
+    """Get all time blocks for a staff member (UC 1.7).
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Staff, TimeBlock
-        
+
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -4549,9 +5897,33 @@ def get_staff_time_blocks(staff_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/time-blocks/<int:block_id>")
 def update_time_block(block_id: int) -> tuple[dict[str, object], int]:
-    """Update a time block (UC 1.7)."""
+    """Update a time block (UC 1.7).
+        ---
+        tags:
+          - TimeBlocks
+        parameters:
+          - in: path
+            name: block_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime
+
         from .models import TimeBlock
         
         data = request.json or {}
@@ -4594,10 +5966,29 @@ def update_time_block(block_id: int) -> tuple[dict[str, object], int]:
 
 @bp.delete("/time-blocks/<int:block_id>")
 def delete_time_block(block_id: int) -> tuple[dict[str, object], int]:
-    """Delete a time block (UC 1.7)."""
+    """Delete a time block (UC 1.7).
+        ---
+        tags:
+          - TimeBlocks
+        parameters:
+          - in: path
+            name: block_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import TimeBlock
-        
+
         # Get time block
         time_block = TimeBlock.query.get(block_id)
         if not time_block:
@@ -4617,11 +6008,36 @@ def delete_time_block(block_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/staff/<int:staff_id>/time-blocks/<string:date>")
 def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, object], int]:
-    """Get time blocks for a specific date (UC 1.14)."""
+    """Get time blocks for a specific date (UC 1.14).
+        ---
+        tags:
+          - Staff
+        parameters:
+          - in: path
+            name: staff_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: date
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime
+
         from .models import Staff, TimeBlock
-        
+
         # Get staff
         staff = Staff.query.get(staff_id)
         if not staff:
@@ -4671,10 +6087,30 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
 
 @bp.get("/salons/<int:salon_id>/payments")
 def get_salon_payments(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all payments for a salon (UC 1.15)."""
+    """Get all payments for a salon (UC 1.15).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Salon, Appointment, User as UserModel
-        
+        from .models import Appointment, Salon
+        from .models import User as UserModel
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -4742,11 +6178,31 @@ def get_salon_payments(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/payments/stats")
 def get_salon_payment_stats(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get payment statistics for a salon (UC 1.15)."""
+    """Get payment statistics for a salon (UC 1.15).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime, timedelta
-        from .models import Salon, Appointment
-        
+
+        from .models import Appointment, Salon
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -4822,11 +6278,36 @@ def get_salon_payment_stats(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/payments/<string:date>")
 def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, object], int]:
-    """Get payments for a specific date (UC 1.15)."""
+    """Get payments for a specific date (UC 1.15).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: date
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime
-        from .models import Salon, Appointment
-        
+
+        from .models import Appointment, Salon
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -4900,10 +6381,30 @@ def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, obje
 
 @bp.get("/salons/<int:salon_id>/customers")
 def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all customers and their visit history for a salon (UC 1.16)."""
+    """Get all customers and their visit history for a salon (UC 1.16).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Salon, Appointment, User as UserModel
-        
+        from .models import Appointment, Salon
+        from .models import User as UserModel
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -4988,10 +6489,35 @@ def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/customers/<int:client_id>/history")
 def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str, object], int]:
-    """Get detailed visit history for a specific customer at a salon (UC 1.16)."""
+    """Get detailed visit history for a specific customer at a salon (UC 1.16).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: client_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Salon, Appointment, User as UserModel
-        
+        from .models import Appointment, Salon
+        from .models import User as UserModel
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -5073,10 +6599,30 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
 # Simple endpoints for UC 1.16 (without authentication)
 @bp.get("/customers/<int:client_id>/visit-history")
 def get_customer_visit_history_simple(client_id: int) -> tuple[dict[str, object], int]:
-    """Get visit history for a customer (UC 1.16 - Simple version)."""
+    """Get visit history for a customer (UC 1.16 - Simple version).
+        ---
+        tags:
+          - Customers
+        parameters:
+          - in: path
+            name: client_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Appointment, User as UserModel
-        
+        from .models import Appointment
+        from .models import User as UserModel
+
         # Get customer
         client = User.query.get(client_id)
         if not client:
@@ -5122,7 +6668,26 @@ def get_customer_visit_history_simple(client_id: int) -> tuple[dict[str, object]
 
 @bp.get("/customers/<int:client_id>")
 def get_customer_simple(client_id: int) -> tuple[dict[str, object], int]:
-    """Get customer information (UC 1.16 - Simple version)."""
+    """Get customer information (UC 1.16 - Simple version).
+        ---
+        tags:
+          - Customers
+        parameters:
+          - in: path
+            name: client_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         client = User.query.get(client_id)
         if not client:
@@ -5151,10 +6716,29 @@ def get_customer_simple(client_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/customers/stats")
 def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get customer statistics for a salon (UC 1.16)."""
+    """Get customer statistics for a salon (UC 1.16).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Salon, Appointment
-        
+        from .models import Appointment, Salon
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -5230,13 +6814,38 @@ def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.post("/appointments/<int:appointment_id>/images")
 def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Upload an image for an appointment (before/after service) (UC 1.17)."""
+    """Upload an image for an appointment (before/after service) (UC 1.17).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Appointment
         import os
         import uuid
         from datetime import datetime
-        
+
+        from .models import Appointment
+
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -5317,10 +6926,29 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
 
 @bp.get("/appointments/<int:appointment_id>/images")
 def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Get all images for an appointment (UC 1.17)."""
+    """Get all images for an appointment (UC 1.17).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Appointment
-        
+
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -5359,11 +6987,36 @@ def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]
 
 @bp.delete("/appointments/<int:appointment_id>/images/<string:image_id>")
 def delete_appointment_image(appointment_id: int, image_id: str) -> tuple[dict[str, object], int]:
-    """Delete an image from an appointment (UC 1.17)."""
+    """Delete an image from an appointment (UC 1.17).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: image_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Appointment
         import os
-        
+
+        from .models import Appointment
+
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -5422,10 +7075,29 @@ def delete_appointment_image(appointment_id: int, image_id: str) -> tuple[dict[s
 
 @bp.get("/services/<int:service_id>/images")
 def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
-    """Get all before/after images for a service (UC 1.17)."""
+    """Get all before/after images for a service (UC 1.17).
+        ---
+        tags:
+          - Services
+        parameters:
+          - in: path
+            name: service_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
-        from .models import Service, Appointment
-        
+        from .models import Appointment, Service
+
         # Get service
         service = Service.query.get(service_id)
         if not service:
@@ -5470,10 +7142,38 @@ def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/appointments/<int:appointment_id>/images/<string:image_id>")
 def update_appointment_image_metadata(appointment_id: int, image_id: str) -> tuple[dict[str, object], int]:
-    """Update image metadata (description, type) (UC 1.17)."""
+    """Update image metadata (description, type) (UC 1.17).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: image_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from .models import Appointment
-        
+
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -5527,11 +7227,35 @@ def update_appointment_image_metadata(appointment_id: int, image_id: str) -> tup
 # UC 1.19: Notify Clients of Delays
 @bp.post("/salons/<int:salon_id>/delays/notify")
 def notify_appointment_delay(salon_id: int) -> tuple[dict[str, object], int]:
-    """Notify clients that vendor is running late (UC 1.19)."""
+    """Notify clients that vendor is running late (UC 1.19).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         import uuid
-        from datetime import datetime, timezone, timedelta
-        
+        from datetime import datetime, timedelta, timezone
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -5631,7 +7355,26 @@ def notify_appointment_delay(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/delays")
 def get_appointment_delays(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all delay notifications for a salon (UC 1.19)."""
+    """Get all delay notifications for a salon (UC 1.19).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -5675,7 +7418,35 @@ def get_appointment_delays(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>/delays/<delay_id>/resolve")
 def resolve_appointment_delay(salon_id: int, delay_id: str) -> tuple[dict[str, object], int]:
-    """Mark a delay notification as resolved (UC 1.19)."""
+    """Mark a delay notification as resolved (UC 1.19).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: delay_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -5724,7 +7495,26 @@ def resolve_appointment_delay(salon_id: int, delay_id: str) -> tuple[dict[str, o
 
 @bp.get("/appointments/<int:appointment_id>/delays")
 def get_appointment_delay_history(appointment_id: int) -> tuple[dict[str, object], int]:
-    """Get delay notification history for an appointment (UC 1.19)."""
+    """Get delay notification history for an appointment (UC 1.19).
+        ---
+        tags:
+          - Appointments
+        parameters:
+          - in: path
+            name: appointment_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
@@ -5762,7 +7552,26 @@ def get_appointment_delay_history(appointment_id: int) -> tuple[dict[str, object
 
 @bp.get("/salons/<int:salon_id>/delays/analytics")
 def get_delay_analytics(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get delay analytics and metrics for a salon (UC 1.19)."""
+    """Get delay analytics and metrics for a salon (UC 1.19).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -5813,11 +7622,35 @@ def get_delay_analytics(salon_id: int) -> tuple[dict[str, object], int]:
 # UC 1.22: Manage Barbers Social Media Links
 @bp.post("/salons/<int:salon_id>/social-media")
 def add_social_media_link(salon_id: int) -> tuple[dict[str, object], int]:
-    """Add a social media link for a salon (UC 1.22)."""
+    """Add a social media link for a salon (UC 1.22).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         import uuid
         from datetime import datetime, timezone
-        
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -5896,7 +7729,26 @@ def add_social_media_link(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/social-media")
 def get_salon_social_media(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all social media links for a salon (UC 1.22)."""
+    """Get all social media links for a salon (UC 1.22).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -5921,7 +7773,26 @@ def get_salon_social_media(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/social-media/all")
 def get_salon_social_media_all(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all social media links for a salon including hidden ones (vendor only) (UC 1.22)."""
+    """Get all social media links for a salon including hidden ones (vendor only) (UC 1.22).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -5953,10 +7824,38 @@ def get_salon_social_media_all(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>/social-media/<link_id>")
 def update_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, object], int]:
-    """Update a social media link (UC 1.22)."""
+    """Update a social media link (UC 1.22).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: link_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         from datetime import datetime, timezone
-        
+
         # Get salon
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -6020,7 +7919,31 @@ def update_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, obj
 
 @bp.delete("/salons/<int:salon_id>/social-media/<link_id>")
 def delete_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, object], int]:
-    """Delete a social media link (UC 1.22)."""
+    """Delete a social media link (UC 1.22).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: link_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         # Get salon
         salon = Salon.query.get(salon_id)
@@ -6070,7 +7993,31 @@ def delete_social_media_link(salon_id: int, link_id: str) -> tuple[dict[str, obj
 
 @bp.post("/salons/<int:salon_id>/promotions")
 def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
-    """Vendor creates a promotional discount for their salon (UC 1.18)."""
+    """Vendor creates a promotional discount for their salon (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            required: true
+            schema:
+              type: object
+        responses:
+          201:
+            description: Created successfully
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         payload = request.get_json(silent=True) or {}
         
@@ -6178,7 +8125,26 @@ def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.get("/salons/<int:salon_id>/promotions")
 def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get all active promotions for a salon (UC 1.18)."""
+    """Get all active promotions for a salon (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -6209,7 +8175,35 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
 
 @bp.put("/salons/<int:salon_id>/promotions/<int:alert_id>")
 def update_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, object], int]:
-    """Vendor updates a promotion (UC 1.18)."""
+    """Vendor updates a promotion (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: alert_id
+            required: true
+            schema:
+              type: integer
+          - in: body
+            name: body
+            schema:
+              type: object
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -6257,7 +8251,31 @@ def update_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, object], i
 
 @bp.delete("/salons/<int:salon_id>/promotions/<int:alert_id>")
 def delete_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, str], int]:
-    """Vendor removes/expires a promotion (UC 1.18)."""
+    """Vendor removes/expires a promotion (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+          - in: path
+            name: alert_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -6285,7 +8303,26 @@ def delete_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, str], int]
 
 @bp.get("/salons/<int:salon_id>/promotions/analytics")
 def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
-    """Get analytics for vendor's promotions (UC 1.18)."""
+    """Get analytics for vendor's promotions (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
     try:
         salon = Salon.query.get(salon_id)
         if not salon:
