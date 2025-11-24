@@ -251,11 +251,50 @@ def create_salon() -> tuple[dict[str, object], int]:
     ---
     tags:
       - Salons
+    parameters: 
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+              example: Vendor Test Salon
+            vendor_id:
+              type: integer
+              example: 108
+            address_line1:
+              type: string
+              example: 123 Main St
+            address_line2:
+              type: string
+              example: Suite B
+            city:
+              type: string
+              example: Testville
+            description:
+              type: string
+              example: A modern, high-quality testing salon.
+            state:
+              type: string
+              example: NJ
+            postal_code:
+              type: string
+              example: 08854
+            phone:
+              type: string
+              example: 555-111-2222
+          required:
+            - name
+            - vendor_id
     responses:
       201:
         description: Salon created successfully
       400:
         description: Invalid payload
+      403:
+        description: Unauthorized (if vendor ID doesn't match authenticated user)
       500:
         description: Server error
     """
@@ -599,16 +638,30 @@ def verify_user() -> tuple[dict[str, object], int]:
         ---
         tags:
           - Users
+        parameters: 
+          - name: email
+            in: query
+            type: string
+            required: true
+            description: The email address of the user to verify.
+            schema:
+              type: string
         responses:
           200:
-            description: Success
+            description: Success. User found.
+            schema: 
+              type: object
+              properties:
+                user:
+                  type: object
+                  description: Basic user information
           400:
-            description: Invalid input
+            description: Invalid input (email query parameter missing).
           404:
-            description: Not found
+            description: Not found (user with the provided email does not exist).
           500:
             description: Database error
-        """
+    """
     email = (request.args.get("email") or "").strip().lower()
 
     if not email:
@@ -1869,7 +1922,7 @@ def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, obj
         from datetime import datetime as dt
         from datetime import timedelta
 
-        from .models import Appointment, Staff, TimeBlock
+        from .models import Appointment, Staff, TimeBlock, Schedule
 
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -6815,20 +6868,34 @@ def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
 @bp.post("/appointments/<int:appointment_id>/images")
 def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
     """Upload an image for an appointment (before/after service) (UC 1.17).
-        ---
-        tags:
-          - Appointments
-        parameters:
-          - in: path
-            name: appointment_id
-            required: true
-            schema:
-              type: integer
-          - in: body
-            name: body
-            required: true
-            schema:
-              type: object
+    ---
+    tags:
+      - Appointments
+    consumes: 
+      - multipart/form-data
+    parameters:
+      - in: path
+        name: appointment_id
+        required: true
+        schema:
+          type: integer
+      - in: formData 
+        name: image
+        type: file 
+        required: true
+        description: The image file (PNG, JPG, JPEG, GIF, WEBP) to upload.
+      - in: formData 
+        name: type
+        type: string
+        required: false
+        enum: [before, after, other]
+        default: other
+        description: Category of the image (before or after the service).
+      - in: formData 
+        name: description
+        type: string
+        required: false
+        description: A short description of the image.
         responses:
           201:
             description: Created successfully
@@ -6840,11 +6907,12 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
             description: Database error
         """
     try:
+        from .models import Appointment, User
         import os
         import uuid
         from datetime import datetime
 
-        from .models import Appointment
+        
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
@@ -6947,7 +7015,7 @@ def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]
             description: Database error
         """
     try:
-        from .models import Appointment
+        #from .models import Appointment
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)

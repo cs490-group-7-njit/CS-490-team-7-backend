@@ -51,14 +51,25 @@ def create_app(test_config: dict | None = None) -> Flask:
         "supports_credentials": True
     }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
-    # INITIALIZE FLASGGER
+    # --- CORRECTED CONFIG ---
     app.config["SWAGGER"] = {
         "title": "SalonHub API",
         "uiversion": 3,
         "version": "1.0.0",
         "description": "API documentation for the CS-490 Team 7 backend.",
+        
+        # REQUIRED FOR THE "AUTHORIZE" BUTTON
+        "securityDefinitions": {
+            "Bearer": {
+                "type": "apiKey",
+                "name": "Authorization",
+                "in": "header",
+                "description": "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\""
+            }
+        }
     }
     Swagger(app)
+    # ------------------------------------
 
     db.init_app(app)
 
