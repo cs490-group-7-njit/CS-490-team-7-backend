@@ -6912,7 +6912,6 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
         import uuid
         from datetime import datetime
 
-        
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
