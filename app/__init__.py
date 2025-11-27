@@ -47,6 +47,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
             "http://127.0.0.1:5175",
+            "http://localhost:4173",
+
+            # PRODUCTION FRONTEND (S3 URL)
+            "http://beautifulhair.s3-website.us-east-2.amazonaws.com",
+
+            # PRODUCTION BACKEND (EC2 public IP)
+            "http://3.129.138.4",
+     
         ],
         "supports_credentials": True
     }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
