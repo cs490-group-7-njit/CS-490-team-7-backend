@@ -2406,7 +2406,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Completed",
-                message=f"Your appointment at {appointment.staff.name}'s salon has been completed. You earned {points_earned} loyalty points!",
+                message=f"Your appointment at {appointment.staff.user.name}'s salon has been completed. You earned {points_earned} loyalty points!",
                 notification_type="appointment_completed",
             )
             db.session.add(notification)
@@ -2415,7 +2415,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Cancelled",
-                message=f"Your appointment at {appointment.staff.name}'s salon has been cancelled.",
+                message=f"Your appointment at {appointment.staff.user.name}'s salon has been cancelled.",  #fixed
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -2424,7 +2424,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment No-Show",
-                message=f"You missed your appointment at {appointment.staff.name}'s salon.",
+                message=f"You missed your appointment at {appointment.staff.user.name}'s salon.", #fixed
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
