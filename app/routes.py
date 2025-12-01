@@ -5738,7 +5738,7 @@ def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str,
             name: start_date
             required: true
             schema:
-              type: integer
+              type: string
         responses:
           200:
             description: Success
@@ -6075,7 +6075,8 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
             name: date
             required: true
             schema:
-              type: integer
+              type: string
+              format: date
         responses:
           200:
             description: Success
