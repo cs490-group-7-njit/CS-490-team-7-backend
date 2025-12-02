@@ -476,6 +476,9 @@ class Transaction(db.Model):
     appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.appointment_id"), nullable=False)
     payment_method_id = db.Column(db.Integer, db.ForeignKey("payment_methods.payment_method_id"), nullable=True)
     amount_cents = db.Column(db.Integer, nullable=False)
+    # Track payment gateway identifier (e.g. Stripe payment intent id)
+    gateway_payment_id = db.Column(db.String(255), nullable=True)
+
     status = db.Column(db.String(50), nullable=False, default="completed")  # completed, pending, failed, refunded
     transaction_date = db.Column(db.DateTime, nullable=False, default=utc_now)
     created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
@@ -492,10 +495,20 @@ class Transaction(db.Model):
             "payment_method_id": self.payment_method_id,
             "amount_cents": self.amount_cents,
             "amount_dollars": self.amount_cents / 100.0,
+            # Keep a simple `amount` property for compatibility with existing code
+            "amount": self.amount,
             "status": self.status,
             "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+    @property
+    def amount(self) -> float:
+        """Return the transaction amount in dollars (float)."""
+        try:
+            return float(self.amount_cents) / 100.0
+        except Exception:
+            return 0.0
 
 
 # UC 2.5 - Notifications
