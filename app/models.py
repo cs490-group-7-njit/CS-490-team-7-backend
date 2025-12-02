@@ -296,7 +296,7 @@ class Appointment(db.Model):
     )
     notes = db.Column(db.Text)
 
-    #added this for POST​/appointments​/{appointment_id}​/images
+    # Added this for POST​/appointments​/{appointment_id}​/images
     image_data = db.Column(db.JSON, nullable=True, default=dict)
 
     created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
