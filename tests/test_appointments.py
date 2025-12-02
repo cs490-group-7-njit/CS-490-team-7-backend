@@ -83,8 +83,8 @@ def test_appointment_status_update_with_null_staff(app, client) -> None:
         assert "You earned 30 loyalty points!" in notification.message
 
 
-def test_appointment_status_update_with_null_staff_user(app, client) -> None:
-    """Test that appointment status update handles staff with null user gracefully."""
+def test_appointment_status_update_cancelled_with_null_staff(app, client) -> None:
+    """Test that appointment status update handles cancelled status with null staff gracefully."""
     with app.app_context():
         # Create test data
         vendor = User(name="Vicky Vendor", email="vicky@example.com", role="vendor")
@@ -106,10 +106,10 @@ def test_appointment_status_update_with_null_staff_user(app, client) -> None:
         db.session.add(salon)
         db.session.flush()
 
-        # Create staff with invalid user_id (user doesn't exist)
+        # Create staff without user (user_id is nullable)
         staff = Staff(
             salon_id=salon.salon_id,
-            user_id=99999,  # Non-existent user
+            user_id=None,  # Explicitly null to test null safety
             title="Stylist",
         )
         db.session.add(staff)

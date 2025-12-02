@@ -2377,7 +2377,6 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
             )
 
         # UC 2.11: Award loyalty points when appointment is completed
-        points_earned = 0
         if appointment.status != "completed" and new_status == "completed":
             # Calculate points (1 point per dollar of service cost)
             points_earned = int(appointment.service.price_cents / 100) if appointment.service and appointment.service.price_cents else 0
