@@ -2328,6 +2328,10 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
     try:
         from .models import Appointment, ClientLoyalty
 
+        # ---Initialize points_earned at the top---
+        points_earned = 0
+        # ------
+
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
             return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
@@ -2350,7 +2354,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 ),
                 400,
             )
-
+        
         # Prevent status transitions that don't make sense
         if appointment.status == "cancelled" and new_status != "cancelled":
             return (
@@ -2406,7 +2410,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Completed",
-                message=f"Your appointment at {appointment.staff.user.name}'s salon has been completed. You earned {points_earned} loyalty points!",
+                message=f"Your appointment at {appointment.staff.user.name}'s salon has been completed. You earned {points_earned} loyalty points!", #fixed
                 notification_type="appointment_completed",
             )
             db.session.add(notification)
@@ -5420,6 +5424,11 @@ def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
         user_id = get_jwt_identity()
         user = User.query.get(user_id)
         
+        # --- fixed ---
+        if not user:
+             return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
+        # --- fixed ---
+
         # Verify access (client can see their own, vendor can see their salon's)
         if user.role == "client" and appointment.client_id != user_id:
             return jsonify({"error": "unauthorized"}), 403
@@ -6623,9 +6632,9 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
                 "date": apt.created_at.isoformat(),
                 "service": apt.service.name if apt.service else "Unknown",
                 "service_id": apt.service_id,
-                "staff": apt.staff.name if apt.staff else "Unknown",
+                "staff": apt.staff.user.name if apt.staff.user else "Unknown",      #fixed
                 "staff_id": apt.staff_id,
-                "duration_minutes": apt.duration if apt.duration else 0,
+                "duration_minutes": apt.service.duration_minutes if apt.service else 0,   #fixed
                 "status": apt.status,
                 "amount_cents": service_price,
                 "amount_dollars": service_price / 100.0,
