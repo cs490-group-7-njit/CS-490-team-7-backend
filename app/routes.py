@@ -644,8 +644,6 @@ def verify_user() -> tuple[dict[str, object], int]:
             type: string
             required: true
             description: The email address of the user to verify.
-            schema:
-              type: string
         responses:
           200:
             description: Success. User found.
