@@ -7025,8 +7025,6 @@ def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]
             description: Database error
         """
     try:
-        #from .models import Appointment
-
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
