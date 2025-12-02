@@ -254,11 +254,50 @@ def create_salon() -> tuple[dict[str, object], int]:
     ---
     tags:
       - Salons
+    parameters: 
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+              example: Vendor Test Salon
+            vendor_id:
+              type: integer
+              example: 108
+            address_line1:
+              type: string
+              example: 123 Main St
+            address_line2:
+              type: string
+              example: Suite B
+            city:
+              type: string
+              example: Testville
+            description:
+              type: string
+              example: A modern, high-quality testing salon.
+            state:
+              type: string
+              example: NJ
+            postal_code:
+              type: string
+              example: 08854
+            phone:
+              type: string
+              example: 555-111-2222
+          required:
+            - name
+            - vendor_id
     responses:
       201:
         description: Salon created successfully
       400:
         description: Invalid payload
+      403:
+        description: Unauthorized (if vendor ID doesn't match authenticated user)
       500:
         description: Server error
     """
@@ -500,7 +539,128 @@ def submit_for_verification(salon_id: int):
     }), 200
 
 
+# --- BEGIN: Client Use Case 2.1 ---
 
+
+@bp.post("/auth/register")
+def register_user() -> tuple[dict[str, object], int]:
+    """Register a new client or vendor user.
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+            password:
+              type: string
+            role:
+              type: string
+              enum: [client, vendor]
+            phone:
+              type: string
+          required:
+            - name
+            - email
+            - password
+    responses:
+      201:
+        description: User registered successfully
+      400:
+        description: Invalid payload or email already exists
+      500:
+        description: Server error
+    """
+    payload = request.get_json(silent=True) or {}
+
+    # Extract and validate required fields
+    name = (payload.get("name") or "").strip()
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    role = (payload.get("role") or "client").strip().lower()
+    phone = (payload.get("phone") or "").strip() or None  # Handle empty string
+
+    if not name or not email or not password:
+        return (
+            jsonify({"error": "invalid_payload", "message": "name, email, and password are required"}),
+            400,
+        )
+
+    # Security: Only allow 'client' or 'vendor' registration via this public endpoint
+    if role not in ["client", "vendor"]:
+        return (
+            jsonify({"error": "invalid_role", "message": "role must be 'client' or 'vendor'"}),
+            400,
+        )
+
+    # Alternative Flow 1: Check if data is invalid (email already exists)
+    if User.query.filter_by(email=email).first():
+        return (
+            jsonify({"error": "conflict", "message": "email address is already in use"}),
+            409,  # 409 Conflict is more specific than 400
+        )
+
+    # Ideal Flow: Create user and auth account
+    try:
+        password_hash = generate_password_hash(password)
+
+        # Create the User
+        new_user = User(name=name, email=email, role=role, phone=phone)
+        db.session.add(new_user)
+        db.session.flush()  # Get the new user_id before creating the AuthAccount
+
+        # Create the associated AuthAccount
+        new_account = AuthAccount(user_id=new_user.user_id, password_hash=password_hash)
+        db.session.add(new_account)
+
+        db.session.commit()
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to register new user", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+    # Ideal Flow (Step 5): Return confirmation and log user in by issuing a token
+    token = _build_token({"user_id": new_user.user_id, "role": new_user.role})
+
+    return jsonify({"token": token, "user": new_user.to_dict_basic()}), 201  # 201 Created
+
+
+# --- END: Client Use Case 2.1 ---
+
+@bp.get("/users/verify")
+def verify_user() -> tuple[dict[str, object], int]:
+    """Check if a user exists by email and return basic details.
+        ---
+        tags:
+          - Users
+        responses:
+          200:
+            description: Success
+          400:
+            description: Invalid input
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
+    email = (request.args.get("email") or "").strip().lower()
+
+    if not email:
+        return jsonify({"error": "invalid_query", "message": "email query parameter is required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if user is None:
+        return jsonify({"error": "not_found", "message": "user not found"}), 404
+
+    return jsonify({"user": user.to_dict_basic()}), 200
 
 
 def _build_token(payload: dict[str, object]) -> str:
@@ -1945,7 +2105,7 @@ def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, obj
         from datetime import datetime as dt
         from datetime import timedelta
 
-        from .models import Appointment, Staff, TimeBlock
+        from .models import Appointment, Staff, TimeBlock, Schedule
 
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -2351,6 +2511,10 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
     try:
         from .models import Appointment, ClientLoyalty
 
+        # ---Initialize points_earned at the top---
+        points_earned = 0
+        # ------
+
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
             return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
@@ -2373,7 +2537,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 ),
                 400,
             )
-
+        
         # Prevent status transitions that don't make sense
         if appointment.status == "cancelled" and new_status != "cancelled":
             return (
@@ -2424,12 +2588,16 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
         db.session.commit()
 
         # UC 2.5: Create notifications based on status change
+        # Get staff name with null safety
+        staff_name = appointment.staff.user.name if appointment.staff and appointment.staff.user else None
+        salon_location = f"{staff_name}'s salon" if staff_name else "the salon"
+        
         if new_status == "completed":
             notification = Notification(
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Completed",
-                message=f"Your appointment at {appointment.staff.name}'s salon has been completed. You earned {points_earned} loyalty points!",
+                message=f"Your appointment at {salon_location} has been completed. You earned {points_earned} loyalty points!",
                 notification_type="appointment_completed",
             )
             db.session.add(notification)
@@ -2438,7 +2606,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Cancelled",
-                message=f"Your appointment at {appointment.staff.name}'s salon has been cancelled.",
+                message=f"Your appointment at {salon_location} has been cancelled.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -2447,7 +2615,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment No-Show",
-                message=f"You missed your appointment at {appointment.staff.name}'s salon.",
+                message=f"You missed your appointment at {salon_location}.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -5443,6 +5611,11 @@ def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
         user_id = get_jwt_identity()
         user = User.query.get(user_id)
         
+        # --- fixed ---
+        if not user:
+            return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
+        # --- fixed ---
+
         # Verify access (client can see their own, vendor can see their salon's)
         if user.role == "client" and appointment.client_id != user_id:
             return jsonify({"error": "unauthorized"}), 403
@@ -5761,7 +5934,7 @@ def get_staff_weekly_schedule(staff_id: int, start_date: str) -> tuple[dict[str,
             name: start_date
             required: true
             schema:
-              type: integer
+              type: string
         responses:
           200:
             description: Success
@@ -6098,7 +6271,8 @@ def get_staff_time_blocks_for_date(staff_id: int, date: str) -> tuple[dict[str, 
             name: date
             required: true
             schema:
-              type: integer
+              type: string
+              format: date
         responses:
           200:
             description: Success
@@ -6645,9 +6819,9 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
                 "date": apt.created_at.isoformat(),
                 "service": apt.service.name if apt.service else "Unknown",
                 "service_id": apt.service_id,
-                "staff": apt.staff.name if apt.staff else "Unknown",
+                "staff": apt.staff.user.name if apt.staff and apt.staff.user else "Unknown",      #fixed
                 "staff_id": apt.staff_id,
-                "duration_minutes": apt.duration if apt.duration else 0,
+                "duration_minutes": apt.service.duration_minutes if apt.service else 0,   #fixed
                 "status": apt.status,
                 "amount_cents": service_price,
                 "amount_dollars": service_price / 100.0,
@@ -6891,36 +7065,50 @@ def get_customer_statistics(salon_id: int) -> tuple[dict[str, object], int]:
 @bp.post("/appointments/<int:appointment_id>/images")
 def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
     """Upload an image for an appointment (before/after service) (UC 1.17).
-        ---
-        tags:
-          - Appointments
-        parameters:
-          - in: path
-            name: appointment_id
-            required: true
-            schema:
-              type: integer
-          - in: body
-            name: body
-            required: true
-            schema:
-              type: object
-        responses:
-          201:
-            description: Created successfully
-          400:
-            description: Invalid input
-          404:
-            description: Not found
-          500:
-            description: Database error
-        """
+    ---
+    tags:
+      - Appointments
+    consumes: 
+      - multipart/form-data
+    parameters:
+      - in: path
+        name: appointment_id
+        required: true
+        schema:
+          type: integer
+      - in: formData 
+        name: image
+        type: file 
+        required: true
+        description: The image file (PNG, JPG, JPEG, GIF, WEBP) to upload.
+      - in: formData 
+        name: type
+        type: string
+        required: false
+        enum: [before, after, other]
+        default: other
+        description: Category of the image (before or after the service).
+      - in: formData 
+        name: description
+        type: string
+        required: false
+        description: A short description of the image.
+    responses:
+      201:
+        description: Created successfully
+      400:
+        description: Invalid input
+      404:
+        description: Not found
+      500:
+        description: Database error
+    """
     try:
         import os
         import uuid
         from datetime import datetime
 
-        from .models import Appointment
+        
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
@@ -7023,8 +7211,6 @@ def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]
             description: Database error
         """
     try:
-        from .models import Appointment
-
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -8226,10 +8412,17 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
-        # Verify vendor authorization
-        vendor_id = request.headers.get("X-Vendor-ID")
-        if not vendor_id or int(vendor_id) != salon.vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
+        # 1. Retrieve user ID from the custom token in the Authorization header.
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+
+        # 2. Verify user is authenticated AND a vendor.
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
+        
+        # 3. Verify vendor owns the salon using the ID retrieved from the token.
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
         # Get active promotions (non-expired discount alerts)
         promotions = DiscountAlert.query.filter(
@@ -8404,10 +8597,17 @@ def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
-        vendor_id = request.headers.get("X-Vendor-ID")
-        if not vendor_id or int(vendor_id) != salon.vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
+        vendor_id = get_jwt_identity() # Retrieve ID from the Bearer Token
+        user = User.query.get(vendor_id)
+
+        # Verify user is authenticated AND a vendor
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
         
+        # Verify vendor owns the salon
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
+
         # Active promotions
         active = DiscountAlert.query.filter(
             DiscountAlert.salon_id == salon_id,
