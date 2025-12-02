@@ -2405,12 +2405,16 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
         db.session.commit()
 
         # UC 2.5: Create notifications based on status change
+        # Get staff name with null safety
+        staff_name = appointment.staff.user.name if appointment.staff and appointment.staff.user else None
+        salon_location = f"{staff_name}'s salon" if staff_name else "the salon"
+        
         if new_status == "completed":
             notification = Notification(
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Completed",
-                message=f"Your appointment at {appointment.staff.user.name if appointment.staff and appointment.staff.user else 'the'}'s salon has been completed. You earned {points_earned} loyalty points!", #fixed
+                message=f"Your appointment at {salon_location} has been completed. You earned {points_earned} loyalty points!",
                 notification_type="appointment_completed",
             )
             db.session.add(notification)
@@ -2419,7 +2423,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Cancelled",
-                message=f"Your appointment at {appointment.staff.user.name if appointment.staff and appointment.staff.user else 'the'}'s salon has been cancelled.",  #fixed
+                message=f"Your appointment at {salon_location} has been cancelled.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -2428,7 +2432,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment No-Show",
-                message=f"You missed your appointment at {appointment.staff.user.name if appointment.staff and appointment.staff.user else 'the'}'s salon.", #fixed
+                message=f"You missed your appointment at {salon_location}.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
