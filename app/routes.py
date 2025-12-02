@@ -6906,16 +6906,16 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
         type: string
         required: false
         description: A short description of the image.
-        responses:
-          201:
-            description: Created successfully
-          400:
-            description: Invalid input
-          404:
-            description: Not found
-          500:
-            description: Database error
-        """
+    responses:
+      201:
+        description: Created successfully
+      400:
+        description: Invalid input
+      404:
+        description: Not found
+      500:
+        description: Database error
+    """
     try:
         from .models import Appointment, User
         import os
