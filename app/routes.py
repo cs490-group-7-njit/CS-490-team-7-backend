@@ -8237,7 +8237,7 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
             return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
         
         # 3. Verify vendor owns the salon using the ID retrieved from the token.
-        if salon.vendor_id != user.user_id: # Use user.user_id (which is vendor_id) for explicit check
+        if salon.vendor_id != vendor_id:
             return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
         # Get active promotions (non-expired discount alerts)
