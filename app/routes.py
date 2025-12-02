@@ -6632,7 +6632,7 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
                 "date": apt.created_at.isoformat(),
                 "service": apt.service.name if apt.service else "Unknown",
                 "service_id": apt.service_id,
-                "staff": apt.staff.user.name if apt.staff.user else "Unknown",      #fixed
+                "staff": apt.staff.user.name if apt.staff and apt.staff.user else "Unknown",      #fixed
                 "staff_id": apt.staff_id,
                 "duration_minutes": apt.service.duration_minutes if apt.service else 0,   #fixed
                 "status": apt.status,
