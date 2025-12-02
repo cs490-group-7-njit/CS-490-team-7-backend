@@ -9,6 +9,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
+import stripe
 
 from .extensions import db
 from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
@@ -237,6 +238,8 @@ def get_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
         # Placeholder for ratings (reviews not yet implemented)
         salon_data["average_rating"] = 4.5
         salon_data["total_reviews"] = 0
+        # Indicate that this salon supports online payments (frontend can show "Pay Online")
+        salon_data["pay_online"] = True if current_app.config.get("ENABLE_PAYMENTS", True) else False
         
         return jsonify({"salon": salon_data}), 200
         
@@ -497,128 +500,7 @@ def submit_for_verification(salon_id: int):
     }), 200
 
 
-# --- BEGIN: Client Use Case 2.1 ---
 
-
-@bp.post("/auth/register")
-def register_user() -> tuple[dict[str, object], int]:
-    """Register a new client or vendor user.
-    ---
-    tags:
-      - Authentication
-    parameters:
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            name:
-              type: string
-            email:
-              type: string
-            password:
-              type: string
-            role:
-              type: string
-              enum: [client, vendor]
-            phone:
-              type: string
-          required:
-            - name
-            - email
-            - password
-    responses:
-      201:
-        description: User registered successfully
-      400:
-        description: Invalid payload or email already exists
-      500:
-        description: Server error
-    """
-    payload = request.get_json(silent=True) or {}
-
-    # Extract and validate required fields
-    name = (payload.get("name") or "").strip()
-    email = (payload.get("email") or "").strip().lower()
-    password = payload.get("password") or ""
-    role = (payload.get("role") or "client").strip().lower()
-    phone = (payload.get("phone") or "").strip() or None  # Handle empty string
-
-    if not name or not email or not password:
-        return (
-            jsonify({"error": "invalid_payload", "message": "name, email, and password are required"}),
-            400,
-        )
-
-    # Security: Only allow 'client' or 'vendor' registration via this public endpoint
-    if role not in ["client", "vendor"]:
-        return (
-            jsonify({"error": "invalid_role", "message": "role must be 'client' or 'vendor'"}),
-            400,
-        )
-
-    # Alternative Flow 1: Check if data is invalid (email already exists)
-    if User.query.filter_by(email=email).first():
-        return (
-            jsonify({"error": "conflict", "message": "email address is already in use"}),
-            409,  # 409 Conflict is more specific than 400
-        )
-
-    # Ideal Flow: Create user and auth account
-    try:
-        password_hash = generate_password_hash(password)
-
-        # Create the User
-        new_user = User(name=name, email=email, role=role, phone=phone)
-        db.session.add(new_user)
-        db.session.flush()  # Get the new user_id before creating the AuthAccount
-
-        # Create the associated AuthAccount
-        new_account = AuthAccount(user_id=new_user.user_id, password_hash=password_hash)
-        db.session.add(new_account)
-
-        db.session.commit()
-
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to register new user", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
-
-    # Ideal Flow (Step 5): Return confirmation and log user in by issuing a token
-    token = _build_token({"user_id": new_user.user_id, "role": new_user.role})
-
-    return jsonify({"token": token, "user": new_user.to_dict_basic()}), 201  # 201 Created
-
-
-# --- END: Client Use Case 2.1 ---
-
-@bp.get("/users/verify")
-def verify_user() -> tuple[dict[str, object], int]:
-    """Check if a user exists by email and return basic details.
-        ---
-        tags:
-          - Users
-        responses:
-          200:
-            description: Success
-          400:
-            description: Invalid input
-          404:
-            description: Not found
-          500:
-            description: Database error
-        """
-    email = (request.args.get("email") or "").strip().lower()
-
-    if not email:
-        return jsonify({"error": "invalid_query", "message": "email query parameter is required"}), 400
-
-    user = User.query.filter_by(email=email).first()
-    if user is None:
-        return jsonify({"error": "not_found", "message": "user not found"}), 404
-
-    return jsonify({"user": user.to_dict_basic()}), 200
 
 
 def _build_token(payload: dict[str, object]) -> str:
@@ -1674,6 +1556,200 @@ def create_appointment() -> tuple[dict[str, object], int]:
         db.session.rollback()
         current_app.logger.exception("Failed to create appointment", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+# --- Payment endpoints (minimal Stripe integration) ---
+
+
+@bp.post("/create-payment-intent")
+def create_payment_intent() -> tuple[dict[str, object], int]:
+    """Create a Stripe PaymentIntent for a given appointment or service.
+
+    Expects JSON: { "appointment_id": <int> } OR { "service_id": <int>, "client_id": <int> }
+    Returns: { client_secret, payment_intent_id }
+    """
+    payload = request.get_json(silent=True) or {}
+    appointment_id = payload.get("appointment_id")
+    service_id = payload.get("service_id")
+    client_id = payload.get("client_id")
+
+    # Require authentication and default client_id to token identity
+    user_id = get_jwt_identity()
+    if not user_id:
+        return jsonify({"error": "unauthorized", "message": "authentication_required"}), 401
+
+    if client_id and int(client_id) != int(user_id):
+        return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
+
+    client_id = int(user_id)
+
+    try:
+        # Determine amount in cents
+        if appointment_id:
+            appt = Appointment.query.get(appointment_id)
+            if not appt:
+                return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
+            amount_cents = appt.service.price_cents if appt.service else 0
+        elif service_id:
+            svc = Service.query.get(service_id)
+            if not svc:
+                return jsonify({"error": "not_found", "message": "Service not found"}), 404
+            amount_cents = svc.price_cents
+        else:
+            return jsonify({"error": "invalid_payload", "message": "appointment_id or service_id required"}), 400
+
+        # Require Stripe secret key in config
+        stripe_key = current_app.config.get("STRIPE_SECRET_KEY")
+        if not stripe_key:
+            current_app.logger.warning("Stripe secret key not configured")
+            return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
+
+        stripe.api_key = stripe_key
+
+        intent = stripe.PaymentIntent.create(
+            amount=int(amount_cents),
+            currency="usd",
+            metadata={
+                "appointment_id": str(appointment_id) if appointment_id else "",
+                "service_id": str(service_id) if service_id else "",
+                "client_id": str(client_id) if client_id else "",
+            },
+        )
+
+        return jsonify({"client_secret": intent.client_secret, "payment_intent_id": intent.id}), 200
+
+    except Exception as exc:
+        current_app.logger.exception("Failed to create payment intent", exc_info=exc)
+        return jsonify({"error": "payment_error", "message": str(exc)}), 500
+
+
+@bp.post("/confirm-payment")
+def confirm_payment() -> tuple[dict[str, object], int]:
+    """Confirm a payment intent and record a Transaction.
+
+    Expects JSON: { "payment_intent_id": <str>, "appointment_id": <int>, "client_id": <int> }
+    """
+    payload = request.get_json(silent=True) or {}
+    payment_intent_id = payload.get("payment_intent_id")
+    appointment_id = payload.get("appointment_id")
+    client_id = payload.get("client_id")
+
+    # Require authentication and validate client
+    user_id = get_jwt_identity()
+    if not user_id:
+        return jsonify({"error": "unauthorized", "message": "authentication_required"}), 401
+
+    if not payment_intent_id or not appointment_id:
+        return jsonify({"error": "invalid_payload", "message": "payment_intent_id and appointment_id required"}), 400
+
+    if client_id and int(client_id) != int(user_id):
+        return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
+
+    client_id = int(user_id)
+
+    stripe_key = current_app.config.get("STRIPE_SECRET_KEY")
+    if not stripe_key:
+        return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
+
+    stripe.api_key = stripe_key
+
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+    except Exception as exc:
+        current_app.logger.exception("Failed to retrieve payment intent", exc_info=exc)
+        return jsonify({"error": "payment_error", "message": str(exc)}), 500
+
+    # If payment succeeded, record a Transaction
+    if intent.status == "succeeded":
+        try:
+            amount_cents = int(intent.amount) if getattr(intent, "amount", None) is not None else 0
+            new_tx = Transaction(
+                user_id=int(client_id),
+                appointment_id=int(appointment_id),
+                payment_method_id=None,
+                amount_cents=amount_cents,
+                status="completed",
+                gateway_payment_id=payment_intent_id,
+            )
+            db.session.add(new_tx)
+            db.session.commit()
+
+            return jsonify({"status": "ok", "transaction_id": new_tx.transaction_id}), 200
+
+        except SQLAlchemyError as exc:
+            db.session.rollback()
+            current_app.logger.exception("Failed to record transaction", exc_info=exc)
+            return jsonify({"error": "database_error"}), 500
+
+    # Otherwise return pending status
+    return jsonify({"status": intent.status}), 200
+
+
+@bp.post("/stripe-webhook")
+def stripe_webhook():
+    """Stripe webhook endpoint to receive asynchronous events.
+
+    Configure `STRIPE_WEBHOOK_SECRET` in app config.
+    """
+    payload = request.get_data()
+    sig_header = request.headers.get("Stripe-Signature")
+    webhook_secret = current_app.config.get("STRIPE_WEBHOOK_SECRET")
+
+    if not webhook_secret:
+        current_app.logger.warning("Stripe webhook secret not configured")
+        return jsonify({"error": "server_error", "message": "webhook_not_configured"}), 500
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except ValueError:
+        # Invalid payload
+        current_app.logger.warning("Invalid webhook payload")
+        return ("Invalid payload", 400)
+    except stripe.error.SignatureVerificationError:
+        current_app.logger.warning("Invalid signature for webhook")
+        return ("Invalid signature", 400)
+
+    # Handle the event
+    evt_type = event.get("type")
+    data = event.get("data", {}).get("object", {})
+
+    if evt_type == "payment_intent.succeeded":
+        payment_intent_id = data.get("id")
+        amount = int(data.get("amount", 0))
+        metadata = data.get("metadata", {}) or {}
+        appointment_id = metadata.get("appointment_id") or None
+        client_id = metadata.get("client_id") or None
+
+        try:
+            # Avoid duplicate transactions: check existing by gateway_payment_id
+            existing = Transaction.query.filter_by(gateway_payment_id=payment_intent_id).first()
+            if existing:
+                # If exists but not completed, update
+                if existing.status != "completed":
+                    existing.status = "completed"
+                    existing.amount_cents = amount
+                    db.session.commit()
+            else:
+                # Only create a transaction if required metadata is present
+                if client_id and appointment_id:
+                    tx = Transaction(
+                        user_id=int(client_id),
+                        appointment_id=int(appointment_id),
+                        payment_method_id=None,
+                        amount_cents=amount,
+                        status="completed",
+                        gateway_payment_id=payment_intent_id,
+                    )
+                    db.session.add(tx)
+                    db.session.commit()
+                else:
+                    current_app.logger.info(
+                        "Webhook received payment_intent.succeeded without client/appointment metadata; skipping transaction creation."
+                    )
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Failed to record transaction from webhook")
+
+    # Return a 200 to acknowledge receipt of the event
+    return jsonify({"received": True}), 200
 
 
 @bp.put("/appointments/<int:appointment_id>")
