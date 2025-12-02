@@ -6917,7 +6917,6 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
             description: Database error
         """
     try:
-        from .models import Appointment, User
         import os
         import uuid
         from datetime import datetime
