@@ -8228,10 +8228,17 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
-        # Verify vendor authorization
-        vendor_id = request.headers.get("X-Vendor-ID")
-        if not vendor_id or int(vendor_id) != salon.vendor_id:
-            return jsonify({"error": "unauthorized"}), 403
+        # 1. Retrieve user ID from the custom token in the Authorization header.
+        vendor_id = get_jwt_identity()
+        user = User.query.get(vendor_id)
+
+        # 2. Verify user is authenticated AND a vendor.
+        if not user or user.role != "vendor":
+            return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
+        
+        # 3. Verify vendor owns the salon using the ID retrieved from the token.
+        if salon.vendor_id != user.user_id: # Use user.user_id (which is vendor_id) for explicit check
+            return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
         # Get active promotions (non-expired discount alerts)
         promotions = DiscountAlert.query.filter(
