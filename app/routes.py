@@ -5424,7 +5424,7 @@ def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
         
         # --- fixed ---
         if not user:
-        return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
+            return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
         # --- fixed ---
 
         # Verify access (client can see their own, vendor can see their salon's)
