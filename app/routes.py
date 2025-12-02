@@ -644,8 +644,6 @@ def verify_user() -> tuple[dict[str, object], int]:
             type: string
             required: true
             description: The email address of the user to verify.
-            schema:
-              type: string
         responses:
           200:
             description: Success. User found.
@@ -2405,12 +2403,16 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
         db.session.commit()
 
         # UC 2.5: Create notifications based on status change
+        # Get staff name with null safety
+        staff_name = appointment.staff.user.name if appointment.staff and appointment.staff.user else None
+        salon_location = f"{staff_name}'s salon" if staff_name else "the salon"
+        
         if new_status == "completed":
             notification = Notification(
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Completed",
-                message=f"Your appointment at {appointment.staff.user.name}'s salon has been completed. You earned {points_earned} loyalty points!", #fixed
+                message=f"Your appointment at {salon_location} has been completed. You earned {points_earned} loyalty points!",
                 notification_type="appointment_completed",
             )
             db.session.add(notification)
@@ -2419,7 +2421,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment Cancelled",
-                message=f"Your appointment at {appointment.staff.user.name}'s salon has been cancelled.",  #fixed
+                message=f"Your appointment at {salon_location} has been cancelled.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -2428,7 +2430,7 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
                 user_id=appointment.client_id,
                 appointment_id=appointment.appointment_id,
                 title="Appointment No-Show",
-                message=f"You missed your appointment at {appointment.staff.user.name}'s salon.", #fixed
+                message=f"You missed your appointment at {salon_location}.",
                 notification_type="appointment_cancelled",
             )
             db.session.add(notification)
@@ -5426,7 +5428,7 @@ def get_appointment_memos(appointment_id: int) -> tuple[dict[str, object], int]:
         
         # --- fixed ---
         if not user:
-             return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
+            return jsonify({"error": "unauthorized", "message": "Authentication required."}), 403
         # --- fixed ---
 
         # Verify access (client can see their own, vendor can see their salon's)
@@ -6632,7 +6634,7 @@ def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str,
                 "date": apt.created_at.isoformat(),
                 "service": apt.service.name if apt.service else "Unknown",
                 "service_id": apt.service_id,
-                "staff": apt.staff.user.name if apt.staff.user else "Unknown",      #fixed
+                "staff": apt.staff.user.name if apt.staff and apt.staff.user else "Unknown",      #fixed
                 "staff_id": apt.staff_id,
                 "duration_minutes": apt.service.duration_minutes if apt.service else 0,   #fixed
                 "status": apt.status,
@@ -6917,7 +6919,6 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
         description: Database error
     """
     try:
-        from .models import Appointment, User
         import os
         import uuid
         from datetime import datetime
@@ -7025,8 +7026,6 @@ def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]
             description: Database error
         """
     try:
-        #from .models import Appointment
-
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -8237,7 +8236,7 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
             return jsonify({"error": "unauthorized", "message": "Vendor access required"}), 403
         
         # 3. Verify vendor owns the salon using the ID retrieved from the token.
-        if salon.vendor_id != user.user_id: # Use user.user_id (which is vendor_id) for explicit check
+        if salon.vendor_id != vendor_id:
             return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
         # Get active promotions (non-expired discount alerts)
