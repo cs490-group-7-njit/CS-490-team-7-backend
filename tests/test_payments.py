@@ -353,7 +353,7 @@ def test_confirm_payment_without_auth(app, client):
     assert data["error"] == "unauthorized"
 
 
-def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock):
+def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock) -> None:
     """Test that user cannot confirm payment for another user's appointment."""
     with app.app_context():
         # Create users
