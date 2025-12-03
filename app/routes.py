@@ -239,7 +239,7 @@ def get_salon_details(salon_id: int) -> tuple[dict[str, object], int]:
         salon_data["average_rating"] = 4.5
         salon_data["total_reviews"] = 0
         # Indicate that this salon supports online payments (frontend can show "Pay Online")
-        salon_data["pay_online"] = True if current_app.config.get("ENABLE_PAYMENTS", True) else False
+        salon_data["pay_online"] = current_app.config.get("ENABLE_PAYMENTS", True)
         
         return jsonify({"salon": salon_data}), 200
         
@@ -1776,10 +1776,16 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
     if not user_id:
         return jsonify({"error": "unauthorized", "message": "authentication_required"}), 401
 
-    if client_id and int(client_id) != int(user_id):
-        return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
-
-    client_id = int(user_id)
+    if client_id:
+        try:
+            client_id_int = int(client_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid_payload", "message": "client_id must be an integer"}), 400
+        if client_id_int != int(user_id):
+            return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
+        client_id = client_id_int
+    else:
+        client_id = int(user_id)
 
     try:
         # Determine amount in cents
@@ -1885,10 +1891,16 @@ def confirm_payment() -> tuple[dict[str, object], int]:
     if not payment_intent_id or not appointment_id:
         return jsonify({"error": "invalid_payload", "message": "payment_intent_id and appointment_id required"}), 400
 
-    if client_id and int(client_id) != int(user_id):
-        return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
-
-    client_id = int(user_id)
+    if client_id:
+        try:
+            client_id_int = int(client_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid_payload", "message": "client_id must be an integer"}), 400
+        if client_id_int != int(user_id):
+            return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
+        client_id = client_id_int
+    else:
+        client_id = int(user_id)
 
     stripe_key = current_app.config.get("STRIPE_SECRET_KEY")
     if not stripe_key:
@@ -1903,14 +1915,14 @@ def confirm_payment() -> tuple[dict[str, object], int]:
     # If payment succeeded, record a Transaction
     if intent.status == "succeeded":
         try:
-            if not hasattr(intent, "amount"):
-                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent is missing required amount field"}), 500
-            amount_cents = int(intent.amount)
-            
             # Check authorization: verify appointment belongs to authenticated user
             appt = Appointment.query.get(appointment_id)
             if not appt or appt.client_id != client_id:
                 return jsonify({"error": "forbidden"}), 403
+            
+            if not hasattr(intent, "amount"):
+                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent is missing required amount field"}), 500
+            amount_cents = int(intent.amount)
             
             # Check for race condition: avoid duplicate transactions
             existing = Transaction.query.filter_by(gateway_payment_id=payment_intent_id).first()
@@ -1993,7 +2005,11 @@ def stripe_webhook():
 
     if evt_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id")
-        amount = int(data.get("amount", 0))
+        amount = data.get("amount")
+        if not amount:
+            current_app.logger.warning(f"Webhook event missing amount for payment_intent {payment_intent_id}")
+            return jsonify({"received": True}), 200
+        amount = int(amount)
         metadata = data.get("metadata", {}) or {}
         appointment_id = metadata.get("appointment_id") or None
         client_id = metadata.get("client_id") or None
