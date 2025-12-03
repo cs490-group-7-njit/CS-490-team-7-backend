@@ -616,7 +616,7 @@ def test_stripe_webhook_invalid_payload(app, client):
     assert data["error"] == "invalid_payload"
 
 
-def test_stripe_webhook_invalid_signature(app, client):
+def test_stripe_webhook_invalid_signature(app, client) -> None:
     """Test webhook with invalid signature."""
     # Create a proper mock exception class
     class MockSignatureVerificationError(Exception):
