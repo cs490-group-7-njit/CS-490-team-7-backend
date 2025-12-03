@@ -283,7 +283,7 @@ def test_create_payment_intent_success(app, client, stripe_mock):
     assert data["payment_intent_id"] == "pi_test123"
 
 
-def test_create_payment_intent_with_service_id(app, client, stripe_mock):
+def test_create_payment_intent_with_service_id(app, client, stripe_mock) -> None:
     """Test creating payment intent with service_id instead of appointment_id."""
     with app.app_context():
         # Create users
