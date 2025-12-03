@@ -481,7 +481,7 @@ class Transaction(db.Model):
     payment_method_id = db.Column(db.Integer, db.ForeignKey("payment_methods.payment_method_id"), nullable=True)
     amount_cents = db.Column(db.Integer, nullable=False)
     # Track payment gateway identifier (e.g. Stripe payment intent id)
-    gateway_payment_id = db.Column(db.String(255), nullable=True)
+    gateway_payment_id = db.Column(db.String(255), nullable=True, unique=True)
 
     status = db.Column(db.String(50), nullable=False, default="completed")  # completed, pending, failed, refunded
     transaction_date = db.Column(db.DateTime, nullable=False, default=utc_now)
