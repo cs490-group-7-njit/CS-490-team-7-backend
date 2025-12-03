@@ -27,7 +27,7 @@ def stripe_mock():
         yield mock_stripe
 
 
-def test_create_payment_intent_without_auth(app, client):
+def test_create_payment_intent_without_auth(app, client) -> None:
     """Test that create_payment_intent requires authentication."""
     response = client.post(
         "/create-payment-intent",
