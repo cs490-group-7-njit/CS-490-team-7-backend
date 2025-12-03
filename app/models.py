@@ -502,12 +502,8 @@ class Transaction(db.Model):
             "status": self.status,
             "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "gateway_payment_id": self.gateway_payment_id,
         }
-
-    @property
-    def amount(self) -> float:
-        """Return the transaction amount in dollars (float)."""
-        return float(self.amount_cents) / 100.0
 
 
 # UC 2.5 - Notifications
