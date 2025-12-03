@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, make_response
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
@@ -594,3 +594,5 @@ def update_purchase_status(purchase_id: int) -> tuple[dict[str, object], int]:
         db.session.rollback()
         current_app.logger.exception("Failed to update purchase", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
+    
+    

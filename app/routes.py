@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, make_response
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +17,7 @@ from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
                      StaffRating, Transaction, User)
 
 bp = Blueprint("api", __name__)
+
 
 
 @bp.get("/health")

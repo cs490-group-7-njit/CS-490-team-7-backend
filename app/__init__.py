@@ -50,14 +50,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             "http://localhost:4173",
 
             # PRODUCTION FRONTEND (S3 URL)
-            "http://beautifulhair.s3-website.us-east-2.amazonaws.com",
+            "http://beautiful-hair.s3-website.us-east-2.amazonaws.com",
+            "https://beautiful-hair.s3-website.us-east-2.amazonaws.com",
 
             # PRODUCTION BACKEND (EC2 public IP)
             "http://3.129.138.4",
      
         ],
         "supports_credentials": True
-    }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    }}, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        automatic_options=True)
 
     # --- CORRECTED CONFIG ---
     app.config["SWAGGER"] = {
