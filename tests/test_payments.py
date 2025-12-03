@@ -600,7 +600,7 @@ def test_confirm_payment_success(app, client, stripe_mock):
         assert tx.status == "completed"
 
 
-def test_stripe_webhook_invalid_payload(app, client):
+def test_stripe_webhook_invalid_payload(app, client) -> None:
     """Test webhook with invalid payload."""
     with patch("app.routes.current_app") as mock_app:
         mock_app.config.get.return_value = "whsec_test"
