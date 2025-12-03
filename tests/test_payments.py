@@ -209,7 +209,7 @@ def test_create_payment_intent_appointment_without_service(app, client):
     assert data["error"] == "invalid_appointment"
 
 
-def test_create_payment_intent_success(app, client, stripe_mock):
+def test_create_payment_intent_success(app, client, stripe_mock) -> None:
     """Test successful payment intent creation."""
     with app.app_context():
         # Create users
