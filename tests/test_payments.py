@@ -939,7 +939,7 @@ def test_create_payment_intent_with_zero_amount(app, client, stripe_mock) -> Non
                 json={"service_id": service_id},
             )
 
-    # Stripe should create the intent even with 0 amount (though it's unusual)
+    # Stripe API allows creating payment intents with 0 amount
     assert response.status_code == 200
 
 

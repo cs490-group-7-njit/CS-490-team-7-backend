@@ -58,7 +58,9 @@ Add a column to store the external payment gateway identifier (e.g. Stripe Payme
 ### SQL
 ```sql
 ALTER TABLE transactions
-ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id,
+ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id;
+
+ALTER TABLE transactions
 ADD UNIQUE INDEX idx_gateway_payment_id (gateway_payment_id);
 ```
 
@@ -71,7 +73,10 @@ app = create_app()
 with app.app_context():
     db.session.execute(text("""
         ALTER TABLE transactions 
-        ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id,
+        ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id;
+    """))
+    db.session.execute(text("""
+        ALTER TABLE transactions
         ADD UNIQUE INDEX idx_gateway_payment_id (gateway_payment_id);
     """))
     db.session.commit()

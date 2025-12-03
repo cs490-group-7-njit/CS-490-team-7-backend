@@ -1977,8 +1977,8 @@ def stripe_webhook():
     webhook_secret = current_app.config.get("STRIPE_WEBHOOK_SECRET")
 
     if not webhook_secret:
-        current_app.logger.warning("Stripe webhook secret not configured")
-        # Do not expose internal config details; return 200 to prevent Stripe retries
+        current_app.logger.error("Stripe webhook secret not configured - webhooks will not be processed")
+        # Return 200 to prevent Stripe retries (config issues should be fixed server-side)
         return jsonify({"received": True}), 200
 
     try:
