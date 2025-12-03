@@ -499,8 +499,6 @@ class Transaction(db.Model):
             "payment_method_id": self.payment_method_id,
             "amount_cents": self.amount_cents,
             "amount_dollars": self.amount_cents / 100.0,
-            # Keep a simple `amount` property for compatibility with existing code
-            "amount": self.amount,
             "status": self.status,
             "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -509,10 +507,7 @@ class Transaction(db.Model):
     @property
     def amount(self) -> float:
         """Return the transaction amount in dollars (float)."""
-        try:
-            return float(self.amount_cents) / 100.0
-        except Exception:
-            return 0.0
+        return float(self.amount_cents) / 100.0
 
 
 # UC 2.5 - Notifications
