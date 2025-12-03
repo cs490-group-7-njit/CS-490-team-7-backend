@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import func, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 import stripe
@@ -1716,7 +1716,7 @@ def create_appointment() -> tuple[dict[str, object], int]:
         db.session.rollback()
         current_app.logger.exception("Failed to create appointment", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
-# --- Payment endpoints (minimal Stripe integration) ---
+# --- Payment endpoints (basic Stripe integration: no saved payment methods or subscriptions) ---
 
 
 @bp.post("/create-payment-intent")
@@ -1740,9 +1740,6 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
             service_id:
               type: integer
               description: ID of the service to pay for (alternative to appointment_id)
-            client_id:
-              type: integer
-              description: ID of the client (optional, defaults to authenticated user)
     responses:
       200:
         description: Payment intent created successfully
@@ -1769,23 +1766,13 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
     payload = request.get_json(silent=True) or {}
     appointment_id = payload.get("appointment_id")
     service_id = payload.get("service_id")
-    client_id = payload.get("client_id")
 
-    # Require authentication and default client_id to token identity
+    # Require authentication
     user_id = get_jwt_identity()
     if not user_id:
-        return jsonify({"error": "unauthorized", "message": "authentication_required"}), 401
+        return jsonify({"error": "unauthorized", "message": "Authentication required. Please log in to continue."}), 401
 
-    if client_id:
-        try:
-            client_id_int = int(client_id)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid_payload", "message": "client_id must be an integer"}), 400
-        if client_id_int != int(user_id):
-            return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
-        client_id = client_id_int
-    else:
-        client_id = int(user_id)
+    client_id = int(user_id)
 
     try:
         # Determine amount in cents
@@ -1810,8 +1797,9 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
         stripe_key = current_app.config.get("STRIPE_SECRET_KEY")
         if not stripe_key:
             current_app.logger.warning("Stripe secret key not configured")
-            return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
+            return jsonify({"error": "server_error", "message": "Payments are not currently available. Please contact support."}), 500
 
+        stripe.api_key = stripe_key
         intent = stripe.PaymentIntent.create(
             amount=int(amount_cents),
             currency="usd",
@@ -1820,14 +1808,16 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
                 "service_id": str(service_id) if service_id else "",
                 "client_id": str(client_id),
             },
-            api_key=stripe_key,
         )
 
         return jsonify({"client_secret": intent.client_secret, "payment_intent_id": intent.id}), 200
 
-    except Exception as exc:
-        current_app.logger.exception("Failed to create payment intent", exc_info=exc)
+    except stripe.error.StripeError as exc:
+        current_app.logger.exception("Stripe API error while creating payment intent", exc_info=exc)
         return jsonify({"error": "payment_error", "message": "An error occurred while processing the payment."}), 500
+    except Exception as exc:
+        current_app.logger.exception("Unexpected error while creating payment intent", exc_info=exc)
+        return jsonify({"error": "server_error", "message": "An unexpected error occurred."}), 500
 
 
 @bp.post("/confirm-payment")
@@ -1854,9 +1844,6 @@ def confirm_payment() -> tuple[dict[str, object], int]:
             appointment_id:
               type: integer
               description: ID of the appointment being paid for
-            client_id:
-              type: integer
-              description: ID of the client (optional, defaults to authenticated user)
     responses:
       200:
         description: Payment confirmed and transaction recorded
@@ -1881,36 +1868,30 @@ def confirm_payment() -> tuple[dict[str, object], int]:
     payload = request.get_json(silent=True) or {}
     payment_intent_id = payload.get("payment_intent_id")
     appointment_id = payload.get("appointment_id")
-    client_id = payload.get("client_id")
 
-    # Require authentication and validate client
+    # Require authentication
     user_id = get_jwt_identity()
     if not user_id:
-        return jsonify({"error": "unauthorized", "message": "authentication_required"}), 401
+        return jsonify({"error": "unauthorized", "message": "Authentication required. Please log in to continue."}), 401
 
     if not payment_intent_id or not appointment_id:
         return jsonify({"error": "invalid_payload", "message": "payment_intent_id and appointment_id required"}), 400
 
-    if client_id:
-        try:
-            client_id_int = int(client_id)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid_payload", "message": "client_id must be an integer"}), 400
-        if client_id_int != int(user_id):
-            return jsonify({"error": "forbidden", "message": "client_id mismatch"}), 403
-        client_id = client_id_int
-    else:
-        client_id = int(user_id)
+    client_id = int(user_id)
 
     stripe_key = current_app.config.get("STRIPE_SECRET_KEY")
     if not stripe_key:
-        return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
+        return jsonify({"error": "server_error", "message": "Payments are not currently available. Please contact support."}), 500
 
+    stripe.api_key = stripe_key
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_key)
-    except Exception as exc:
-        current_app.logger.exception("Failed to retrieve payment intent", exc_info=exc)
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+    except stripe.error.StripeError as exc:
+        current_app.logger.exception("Stripe API error while retrieving payment intent", exc_info=exc)
         return jsonify({"error": "payment_error", "message": "Failed to retrieve payment intent"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Unexpected error while retrieving payment intent", exc_info=exc)
+        return jsonify({"error": "server_error", "message": "An unexpected error occurred."}), 500
 
     # If payment succeeded, record a Transaction
     if intent.status == "succeeded":
@@ -1920,8 +1901,8 @@ def confirm_payment() -> tuple[dict[str, object], int]:
             if not appt or appt.client_id != client_id:
                 return jsonify({"error": "forbidden"}), 403
             
-            if not hasattr(intent, "amount"):
-                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent is missing required amount field"}), 500
+            if not intent.amount or intent.amount <= 0:
+                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent has invalid amount"}), 500
             amount_cents = int(intent.amount)
             
             # Check for race condition: avoid duplicate transactions
@@ -1942,6 +1923,16 @@ def confirm_payment() -> tuple[dict[str, object], int]:
 
             return jsonify({"status": "ok", "transaction_id": new_tx.transaction_id}), 200
 
+        except IntegrityError as exc:
+            db.session.rollback()
+            current_app.logger.warning("Duplicate transaction attempt detected for payment_intent %s", payment_intent_id)
+            # Handle race condition: transaction was created by another request
+            existing = Transaction.query.filter_by(gateway_payment_id=payment_intent_id).first()
+            if existing:
+                return jsonify({"status": "ok", "transaction_id": existing.transaction_id}), 200
+            # If we still can't find it, log error and return generic error
+            current_app.logger.exception("IntegrityError but no existing transaction found", exc_info=exc)
+            return jsonify({"error": "database_error"}), 500
         except SQLAlchemyError as exc:
             db.session.rollback()
             current_app.logger.exception("Failed to record transaction", exc_info=exc)
@@ -1987,7 +1978,8 @@ def stripe_webhook():
 
     if not webhook_secret:
         current_app.logger.warning("Stripe webhook secret not configured")
-        return jsonify({"error": "server_error", "message": "webhook_not_configured"}), 500
+        # Do not expose internal config details; return 200 to prevent Stripe retries
+        return jsonify({"received": True}), 200
 
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
@@ -2006,8 +1998,8 @@ def stripe_webhook():
     if evt_type == "payment_intent.succeeded":
         payment_intent_id = data.get("id")
         amount = data.get("amount")
-        if not amount:
-            current_app.logger.warning(f"Webhook event missing amount for payment_intent {payment_intent_id}")
+        if not amount or amount <= 0:
+            current_app.logger.warning(f"Webhook event has invalid amount for payment_intent {payment_intent_id}")
             return jsonify({"received": True}), 200
         amount = int(amount)
         metadata = data.get("metadata", {}) or {}
@@ -2040,6 +2032,10 @@ def stripe_webhook():
                     current_app.logger.info(
                         "Webhook received payment_intent.succeeded without client/appointment metadata; skipping transaction creation."
                     )
+        except IntegrityError as exc:
+            db.session.rollback()
+            current_app.logger.warning("Duplicate transaction attempt from webhook for payment_intent %s", payment_intent_id)
+            # Race condition handled by unique constraint
         except (SQLAlchemyError, ValueError, TypeError) as exc:
             db.session.rollback()
             current_app.logger.exception("Failed to record transaction from webhook", exc_info=exc)

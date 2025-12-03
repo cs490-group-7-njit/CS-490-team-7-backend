@@ -48,6 +48,8 @@ with app.app_context():
 - UC 1.4 - Manage Shop Details
 - UC 1.5 - Submit Salon for Verification (Frontend)
 
+## Date: December 1, 2025
+
 ## Add `gateway_payment_id` to `transactions` table (Payment integration)
 
 ### Purpose
@@ -56,7 +58,8 @@ Add a column to store the external payment gateway identifier (e.g. Stripe Payme
 ### SQL
 ```sql
 ALTER TABLE transactions
-ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id;
+ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id,
+ADD UNIQUE INDEX idx_gateway_payment_id (gateway_payment_id);
 ```
 
 ### Python (SQLAlchemy) example
@@ -66,13 +69,16 @@ from sqlalchemy import text
 
 app = create_app()
 with app.app_context():
-    db.session.execute(text(
-        "ALTER TABLE transactions ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id;"
-    ))
+    db.session.execute(text("""
+        ALTER TABLE transactions 
+        ADD COLUMN gateway_payment_id VARCHAR(255) NULL AFTER payment_method_id,
+        ADD UNIQUE INDEX idx_gateway_payment_id (gateway_payment_id);
+    """))
     db.session.commit()
 ```
 
 ### Notes
 - If you use Alembic or another migration tool, create a migration that adds this column instead of running raw SQL.
-- After applying the migration, run tests and verify the `transactions` table now has the `gateway_payment_id` column.
+- The unique constraint on `gateway_payment_id` prevents race conditions where multiple requests could attempt to create duplicate transactions for the same payment.
+- After applying the migration, run tests and verify the `transactions` table now has the `gateway_payment_id` column with a unique constraint.
 
