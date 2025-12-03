@@ -1795,6 +1795,8 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
                 return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
             if appt.client_id != client_id:
                 return jsonify({"error": "forbidden", "message": "You are not authorized to create a payment intent for this appointment"}), 403
+            if appt.client_id != client_id:
+                return jsonify({"error": "forbidden", "message": "You are not authorized to create a payment intent for this appointment"}), 403
             if not appt.service:
                 return jsonify({"error": "invalid_appointment", "message": "Appointment has no associated service"}), 400
             amount_cents = appt.service.price_cents
