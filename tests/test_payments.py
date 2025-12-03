@@ -60,7 +60,7 @@ def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock
     assert data["error"] == "not_found"
 
 
-def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock):
+def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock) -> None:
     """Test that user cannot create payment intent for another user's appointment."""
     with app.app_context():
         # Create users
