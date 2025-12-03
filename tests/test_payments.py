@@ -426,7 +426,7 @@ def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock) -> N
     assert data["error"] == "forbidden"
 
 
-def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_mock):
+def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_mock) -> None:
     """Test that confirm_payment prevents duplicate transaction creation."""
     with app.app_context():
         # Create users
