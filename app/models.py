@@ -503,6 +503,8 @@ class Transaction(db.Model):
             "transaction_date": self.transaction_date.isoformat() if self.transaction_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "gateway_payment_id": self.gateway_payment_id,
+            "gateway_payment_id": self.gateway_payment_id,
+            "gateway_payment_id": self.gateway_payment_id,
         }
 
 
