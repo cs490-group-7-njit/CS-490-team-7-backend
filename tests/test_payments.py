@@ -341,7 +341,7 @@ def test_create_payment_intent_with_service_id(app, client, stripe_mock) -> None
     assert call_args[1]["amount"] == 3000
 
 
-def test_confirm_payment_without_auth(app, client):
+def test_confirm_payment_without_auth(app, client) -> None:
     """Test that confirm_payment requires authentication."""
     response = client.post(
         "/confirm-payment",
