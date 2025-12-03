@@ -1722,9 +1722,49 @@ def create_appointment() -> tuple[dict[str, object], int]:
 @bp.post("/create-payment-intent")
 def create_payment_intent() -> tuple[dict[str, object], int]:
     """Create a Stripe PaymentIntent for a given appointment or service.
-
-    Expects JSON: { "appointment_id": <int> } OR { "service_id": <int>, "client_id": <int> }
-    Returns: { client_secret, payment_intent_id }
+    ---
+    tags:
+      - Payments
+    security:
+      - Bearer: []
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            appointment_id:
+              type: integer
+              description: ID of the appointment to pay for
+            service_id:
+              type: integer
+              description: ID of the service to pay for (alternative to appointment_id)
+            client_id:
+              type: integer
+              description: ID of the client (optional, defaults to authenticated user)
+    responses:
+      200:
+        description: Payment intent created successfully
+        schema:
+          type: object
+          properties:
+            client_secret:
+              type: string
+              description: Stripe client secret for completing payment
+            payment_intent_id:
+              type: string
+              description: Stripe payment intent ID
+      400:
+        description: Invalid request payload
+      401:
+        description: Authentication required
+      403:
+        description: Not authorized to create payment intent for this appointment
+      404:
+        description: Appointment or service not found
+      500:
+        description: Server error or payment processing error
     """
     payload = request.get_json(silent=True) or {}
     appointment_id = payload.get("appointment_id")
@@ -1747,7 +1787,11 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
             appt = Appointment.query.get(appointment_id)
             if not appt:
                 return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
-            amount_cents = appt.service.price_cents if appt.service else 0
+            if appt.client_id != client_id:
+                return jsonify({"error": "forbidden", "message": "You are not authorized to create a payment intent for this appointment"}), 403
+            if not appt.service:
+                return jsonify({"error": "invalid_appointment", "message": "Appointment has no associated service"}), 400
+            amount_cents = appt.service.price_cents
         elif service_id:
             svc = Service.query.get(service_id)
             if not svc:
@@ -1762,30 +1806,71 @@ def create_payment_intent() -> tuple[dict[str, object], int]:
             current_app.logger.warning("Stripe secret key not configured")
             return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
 
-        stripe.api_key = stripe_key
-
         intent = stripe.PaymentIntent.create(
             amount=int(amount_cents),
             currency="usd",
             metadata={
                 "appointment_id": str(appointment_id) if appointment_id else "",
                 "service_id": str(service_id) if service_id else "",
-                "client_id": str(client_id) if client_id else "",
+                "client_id": str(client_id),
             },
+            api_key=stripe_key,
         )
 
         return jsonify({"client_secret": intent.client_secret, "payment_intent_id": intent.id}), 200
 
     except Exception as exc:
         current_app.logger.exception("Failed to create payment intent", exc_info=exc)
-        return jsonify({"error": "payment_error", "message": str(exc)}), 500
+        return jsonify({"error": "payment_error", "message": "An error occurred while processing the payment."}), 500
 
 
 @bp.post("/confirm-payment")
 def confirm_payment() -> tuple[dict[str, object], int]:
     """Confirm a payment intent and record a Transaction.
-
-    Expects JSON: { "payment_intent_id": <str>, "appointment_id": <int>, "client_id": <int> }
+    ---
+    tags:
+      - Payments
+    security:
+      - Bearer: []
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          required:
+            - payment_intent_id
+            - appointment_id
+          properties:
+            payment_intent_id:
+              type: string
+              description: Stripe payment intent ID
+            appointment_id:
+              type: integer
+              description: ID of the appointment being paid for
+            client_id:
+              type: integer
+              description: ID of the client (optional, defaults to authenticated user)
+    responses:
+      200:
+        description: Payment confirmed and transaction recorded
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              description: Payment status (ok or pending)
+            transaction_id:
+              type: integer
+              description: ID of the created transaction (only when status is ok)
+      400:
+        description: Invalid request payload
+      401:
+        description: Authentication required
+      403:
+        description: Not authorized to confirm payment for this appointment
+      500:
+        description: Server error or payment retrieval error
     """
     payload = request.get_json(silent=True) or {}
     payment_intent_id = payload.get("payment_intent_id")
@@ -1809,18 +1894,29 @@ def confirm_payment() -> tuple[dict[str, object], int]:
     if not stripe_key:
         return jsonify({"error": "server_error", "message": "payments_not_configured"}), 500
 
-    stripe.api_key = stripe_key
-
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_key)
     except Exception as exc:
         current_app.logger.exception("Failed to retrieve payment intent", exc_info=exc)
-        return jsonify({"error": "payment_error", "message": str(exc)}), 500
+        return jsonify({"error": "payment_error", "message": "Failed to retrieve payment intent"}), 500
 
     # If payment succeeded, record a Transaction
     if intent.status == "succeeded":
         try:
-            amount_cents = int(intent.amount) if getattr(intent, "amount", None) is not None else 0
+            if not hasattr(intent, "amount"):
+                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent is missing required amount field"}), 500
+            amount_cents = int(intent.amount)
+            
+            # Check authorization: verify appointment belongs to authenticated user
+            appt = Appointment.query.get(appointment_id)
+            if not appt or appt.client_id != client_id:
+                return jsonify({"error": "forbidden"}), 403
+            
+            # Check for race condition: avoid duplicate transactions
+            existing = Transaction.query.filter_by(gateway_payment_id=payment_intent_id).first()
+            if existing:
+                return jsonify({"status": "ok", "transaction_id": existing.transaction_id}), 200
+            
             new_tx = Transaction(
                 user_id=int(client_id),
                 appointment_id=int(appointment_id),
@@ -1846,8 +1942,32 @@ def confirm_payment() -> tuple[dict[str, object], int]:
 @bp.post("/stripe-webhook")
 def stripe_webhook():
     """Stripe webhook endpoint to receive asynchronous events.
-
-    Configure `STRIPE_WEBHOOK_SECRET` in app config.
+    ---
+    tags:
+      - Payments
+    parameters:
+      - name: Stripe-Signature
+        in: header
+        required: true
+        type: string
+        description: Stripe signature for webhook verification
+      - name: body
+        in: body
+        required: true
+        description: Stripe webhook event payload
+    responses:
+      200:
+        description: Webhook event received and processed
+        schema:
+          type: object
+          properties:
+            received:
+              type: boolean
+              example: true
+      400:
+        description: Invalid payload or signature
+      500:
+        description: Webhook not configured
     """
     payload = request.get_data()
     sig_header = request.headers.get("Stripe-Signature")
@@ -1862,10 +1982,10 @@ def stripe_webhook():
     except ValueError:
         # Invalid payload
         current_app.logger.warning("Invalid webhook payload")
-        return ("Invalid payload", 400)
+        return jsonify({"error": "invalid_payload"}), 400
     except stripe.error.SignatureVerificationError:
         current_app.logger.warning("Invalid signature for webhook")
-        return ("Invalid signature", 400)
+        return jsonify({"error": "invalid_signature"}), 400
 
     # Handle the event
     evt_type = event.get("type")
@@ -1904,9 +2024,9 @@ def stripe_webhook():
                     current_app.logger.info(
                         "Webhook received payment_intent.succeeded without client/appointment metadata; skipping transaction creation."
                     )
-        except Exception:
+        except (SQLAlchemyError, ValueError, TypeError) as exc:
             db.session.rollback()
-            current_app.logger.exception("Failed to record transaction from webhook")
+            current_app.logger.exception("Failed to record transaction from webhook", exc_info=exc)
 
     # Return a 200 to acknowledge receipt of the event
     return jsonify({"received": True}), 200
