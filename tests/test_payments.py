@@ -283,6 +283,64 @@ def test_create_payment_intent_success(app, client, stripe_mock):
     assert data["payment_intent_id"] == "pi_test123"
 
 
+def test_create_payment_intent_with_service_id(app, client, stripe_mock):
+    """Test creating payment intent with service_id instead of appointment_id."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.commit()
+        
+        service_id = service.service_id
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/create-payment-intent",
+                json={"service_id": service_id},
+            )
+    
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "client_secret" in data
+    assert "payment_intent_id" in data
+    assert data["payment_intent_id"] == "pi_test123"
+    
+    # Verify the correct amount was used
+    stripe_mock.PaymentIntent.create.assert_called_once()
+    call_args = stripe_mock.PaymentIntent.create.call_args
+    assert call_args[1]["amount"] == 3000
+
+
 def test_confirm_payment_without_auth(app, client):
     """Test that confirm_payment requires authentication."""
     response = client.post(
