@@ -558,17 +558,22 @@ def test_stripe_webhook_invalid_payload(app, client):
     assert data["error"] == "invalid_payload"
 
 
-def test_stripe_webhook_invalid_signature(app, client, stripe_mock):
+def test_stripe_webhook_invalid_signature(app, client):
     """Test webhook with invalid signature."""
+    # Create a proper mock exception class
+    class MockSignatureVerificationError(Exception):
+        """Mock Stripe SignatureVerificationError."""
+        pass
+    
     with patch("app.routes.current_app") as mock_app:
         mock_app.config.get.return_value = "whsec_test"
-        stripe_mock.error.SignatureVerificationError = Exception
-        with patch("app.routes.stripe.Webhook.construct_event", side_effect=stripe_mock.error.SignatureVerificationError):
-            response = client.post(
-                "/stripe-webhook",
-                data=b"payload",
-                headers={"Stripe-Signature": "sig_invalid"},
-            )
+        with patch("app.routes.stripe.error.SignatureVerificationError", MockSignatureVerificationError):
+            with patch("app.routes.stripe.Webhook.construct_event", side_effect=MockSignatureVerificationError):
+                response = client.post(
+                    "/stripe-webhook",
+                    data=b"payload",
+                    headers={"Stripe-Signature": "sig_invalid"},
+                )
     
     assert response.status_code == 400
     data = response.get_json()
