@@ -505,6 +505,7 @@ class Transaction(db.Model):
             "gateway_payment_id": self.gateway_payment_id,
             "gateway_payment_id": self.gateway_payment_id,
             "gateway_payment_id": self.gateway_payment_id,
+            "gateway_payment_id": self.gateway_payment_id,
         }
 
 
