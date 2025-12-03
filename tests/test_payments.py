@@ -133,7 +133,7 @@ def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock
     assert data["error"] == "forbidden"
 
 
-def test_create_payment_intent_appointment_without_service(app, client):
+def test_create_payment_intent_appointment_without_service(app, client) -> None:
     """Test create_payment_intent with missing service (edge case - service was deleted)."""
     with app.app_context():
         # Create users
