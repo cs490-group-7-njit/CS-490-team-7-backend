@@ -1904,7 +1904,7 @@ def confirm_payment() -> tuple[dict[str, object], int]:
     if intent.status == "succeeded":
         try:
             if not hasattr(intent, "amount"):
-                return jsonify({"error": "invalid_payment_intent"}), 500
+                return jsonify({"error": "invalid_payment_intent", "message": "Payment intent is missing required amount field"}), 500
             amount_cents = int(intent.amount)
             
             # Check authorization: verify appointment belongs to authenticated user
