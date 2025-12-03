@@ -341,6 +341,28 @@ def test_create_payment_intent_with_service_id(app, client, stripe_mock) -> None
     assert call_args[1]["amount"] == 3000
 
 
+def test_create_payment_intent_with_missing_service(app, client, stripe_mock) -> None:
+    """Test create_payment_intent with non-existent service_id."""
+    with app.app_context():
+        # Create test user
+        user = User(name="Test User", email="test@example.com", role="client")
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity to return user_id
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        response = client.post(
+            "/create-payment-intent",
+            json={"service_id": 9999},
+        )
+    
+    assert response.status_code == 404
+    data = response.get_json()
+    assert data["error"] == "not_found"
+    assert data["message"] == "Service not found"
+
+
 def test_confirm_payment_without_auth(app, client) -> None:
     """Test that confirm_payment requires authentication."""
     response = client.post(
