@@ -39,7 +39,7 @@ def test_create_payment_intent_without_auth(app, client) -> None:
     assert data["error"] == "unauthorized"
 
 
-def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock):
+def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock) -> None:
     """Test create_payment_intent with non-existent appointment."""
     with app.app_context():
         # Create test user
@@ -60,7 +60,7 @@ def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock
     assert data["error"] == "not_found"
 
 
-def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock):
+def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock) -> None:
     """Test that user cannot create payment intent for another user's appointment."""
     with app.app_context():
         # Create users
@@ -133,7 +133,7 @@ def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock
     assert data["error"] == "forbidden"
 
 
-def test_create_payment_intent_appointment_without_service(app, client):
+def test_create_payment_intent_appointment_without_service(app, client) -> None:
     """Test create_payment_intent with missing service (edge case - service was deleted)."""
     with app.app_context():
         # Create users
@@ -209,7 +209,7 @@ def test_create_payment_intent_appointment_without_service(app, client):
     assert data["error"] == "invalid_appointment"
 
 
-def test_create_payment_intent_success(app, client, stripe_mock):
+def test_create_payment_intent_success(app, client, stripe_mock) -> None:
     """Test successful payment intent creation."""
     with app.app_context():
         # Create users
@@ -283,7 +283,7 @@ def test_create_payment_intent_success(app, client, stripe_mock):
     assert data["payment_intent_id"] == "pi_test123"
 
 
-def test_create_payment_intent_with_service_id(app, client, stripe_mock):
+def test_create_payment_intent_with_service_id(app, client, stripe_mock) -> None:
     """Test creating payment intent with service_id instead of appointment_id."""
     with app.app_context():
         # Create users
@@ -341,7 +341,7 @@ def test_create_payment_intent_with_service_id(app, client, stripe_mock):
     assert call_args[1]["amount"] == 3000
 
 
-def test_confirm_payment_without_auth(app, client):
+def test_confirm_payment_without_auth(app, client) -> None:
     """Test that confirm_payment requires authentication."""
     response = client.post(
         "/confirm-payment",
@@ -353,7 +353,7 @@ def test_confirm_payment_without_auth(app, client):
     assert data["error"] == "unauthorized"
 
 
-def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock):
+def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock) -> None:
     """Test that user cannot confirm payment for another user's appointment."""
     with app.app_context():
         # Create users
@@ -426,7 +426,7 @@ def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock):
     assert data["error"] == "forbidden"
 
 
-def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_mock):
+def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_mock) -> None:
     """Test that confirm_payment prevents duplicate transaction creation."""
     with app.app_context():
         # Create users
@@ -518,7 +518,7 @@ def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_moc
         assert count == 1
 
 
-def test_confirm_payment_success(app, client, stripe_mock):
+def test_confirm_payment_success(app, client, stripe_mock) -> None:
     """Test successful payment confirmation and transaction creation."""
     with app.app_context():
         # Create users
@@ -600,7 +600,7 @@ def test_confirm_payment_success(app, client, stripe_mock):
         assert tx.status == "completed"
 
 
-def test_stripe_webhook_invalid_payload(app, client):
+def test_stripe_webhook_invalid_payload(app, client) -> None:
     """Test webhook with invalid payload."""
     with patch("app.routes.current_app") as mock_app:
         mock_app.config.get.return_value = "whsec_test"
@@ -616,7 +616,7 @@ def test_stripe_webhook_invalid_payload(app, client):
     assert data["error"] == "invalid_payload"
 
 
-def test_stripe_webhook_invalid_signature(app, client):
+def test_stripe_webhook_invalid_signature(app, client) -> None:
     """Test webhook with invalid signature."""
     # Create a proper mock exception class
     class MockSignatureVerificationError(Exception):
