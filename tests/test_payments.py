@@ -638,7 +638,7 @@ def test_stripe_webhook_invalid_signature(app, client):
     assert data["error"] == "invalid_signature"
 
 
-def test_stripe_webhook_payment_intent_succeeded(app, client, stripe_mock):
+def test_stripe_webhook_payment_intent_succeeded(app, client, stripe_mock) -> None:
     """Test webhook handling of payment_intent.succeeded event."""
     with app.app_context():
         # Create users
