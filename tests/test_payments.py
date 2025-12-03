@@ -39,7 +39,7 @@ def test_create_payment_intent_without_auth(app, client) -> None:
     assert data["error"] == "unauthorized"
 
 
-def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock):
+def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock) -> None:
     """Test create_payment_intent with non-existent appointment."""
     with app.app_context():
         # Create test user
