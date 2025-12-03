@@ -1,0 +1,670 @@
+"""Tests for payment endpoints."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from app.extensions import db
+from app.models import Appointment, Salon, Service, Staff, Transaction, User
+
+
+@pytest.fixture
+def stripe_mock():
+    """Mock Stripe API calls."""
+    with patch("app.routes.stripe") as mock_stripe:
+        # Mock PaymentIntent object
+        mock_intent = MagicMock()
+        mock_intent.id = "pi_test123"
+        mock_intent.client_secret = "pi_test123_secret_abc"
+        mock_intent.amount = 3000
+        mock_intent.status = "succeeded"
+        
+        mock_stripe.PaymentIntent.create.return_value = mock_intent
+        mock_stripe.PaymentIntent.retrieve.return_value = mock_intent
+        
+        yield mock_stripe
+
+
+def test_create_payment_intent_without_auth(app, client):
+    """Test that create_payment_intent requires authentication."""
+    response = client.post(
+        "/create-payment-intent",
+        json={"appointment_id": 1},
+    )
+    
+    assert response.status_code == 401
+    data = response.get_json()
+    assert data["error"] == "unauthorized"
+
+
+def test_create_payment_intent_with_missing_appointment(app, client, stripe_mock):
+    """Test create_payment_intent with non-existent appointment."""
+    with app.app_context():
+        # Create test user
+        user = User(name="Test User", email="test@example.com", role="client")
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity to return user_id
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        response = client.post(
+            "/create-payment-intent",
+            json={"appointment_id": 9999},
+        )
+    
+    assert response.status_code == 404
+    data = response.get_json()
+    assert data["error"] == "not_found"
+
+
+def test_create_payment_intent_unauthorized_appointment(app, client, stripe_mock):
+    """Test that user cannot create payment intent for another user's appointment."""
+    with app.app_context():
+        # Create users
+        user1 = User(name="User One", email="user1@example.com", role="client")
+        user2 = User(name="User Two", email="user2@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user1, user2, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment for user1
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user1.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user2_id = user2.user_id
+    
+    # Mock get_jwt_identity to return user2_id (different user)
+    with patch("app.routes.get_jwt_identity", return_value=user2_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/create-payment-intent",
+                json={"appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 403
+    data = response.get_json()
+    assert data["error"] == "forbidden"
+
+
+def test_create_payment_intent_appointment_without_service(app, client):
+    """Test create_payment_intent with missing service (edge case - service was deleted)."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment with service
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        # Delete the service to simulate edge case where service was removed after appointment was created
+        db.session.delete(service)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/create-payment-intent",
+                json={"appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 400
+    data = response.get_json()
+    assert data["error"] == "invalid_appointment"
+
+
+def test_create_payment_intent_success(app, client, stripe_mock):
+    """Test successful payment intent creation."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/create-payment-intent",
+                json={"appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "client_secret" in data
+    assert "payment_intent_id" in data
+    assert data["payment_intent_id"] == "pi_test123"
+
+
+def test_confirm_payment_without_auth(app, client):
+    """Test that confirm_payment requires authentication."""
+    response = client.post(
+        "/confirm-payment",
+        json={"payment_intent_id": "pi_test123", "appointment_id": 1},
+    )
+    
+    assert response.status_code == 401
+    data = response.get_json()
+    assert data["error"] == "unauthorized"
+
+
+def test_confirm_payment_unauthorized_appointment(app, client, stripe_mock):
+    """Test that user cannot confirm payment for another user's appointment."""
+    with app.app_context():
+        # Create users
+        user1 = User(name="User One", email="user1@example.com", role="client")
+        user2 = User(name="User Two", email="user2@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user1, user2, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment for user1
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user1.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user2_id = user2.user_id
+    
+    # Mock get_jwt_identity to return user2_id (different user)
+    with patch("app.routes.get_jwt_identity", return_value=user2_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/confirm-payment",
+                json={"payment_intent_id": "pi_test123", "appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 403
+    data = response.get_json()
+    assert data["error"] == "forbidden"
+
+
+def test_confirm_payment_prevents_duplicate_transactions(app, client, stripe_mock):
+    """Test that confirm_payment prevents duplicate transaction creation."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.flush()
+        
+        # Create existing transaction
+        existing_tx = Transaction(
+            user_id=user.user_id,
+            appointment_id=appointment.appointment_id,
+            payment_method_id=None,
+            amount_cents=3000,
+            status="completed",
+            gateway_payment_id="pi_test123",
+        )
+        db.session.add(existing_tx)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user_id = user.user_id
+        existing_tx_id = existing_tx.transaction_id
+    
+    # Mock get_jwt_identity
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/confirm-payment",
+                json={"payment_intent_id": "pi_test123", "appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "ok"
+    # Should return the existing transaction ID
+    assert data["transaction_id"] == existing_tx_id
+    
+    # Verify only one transaction exists
+    with app.app_context():
+        count = Transaction.query.filter_by(gateway_payment_id="pi_test123").count()
+        assert count == 1
+
+
+def test_confirm_payment_success(app, client, stripe_mock):
+    """Test successful payment confirmation and transaction creation."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user_id = user.user_id
+    
+    # Mock get_jwt_identity
+    with patch("app.routes.get_jwt_identity", return_value=user_id):
+        # Mock Stripe config
+        with patch("app.routes.current_app") as mock_app:
+            mock_app.config.get.return_value = "sk_test_fake"
+            response = client.post(
+                "/confirm-payment",
+                json={"payment_intent_id": "pi_test123", "appointment_id": appointment_id},
+            )
+    
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "ok"
+    assert "transaction_id" in data
+    
+    # Verify transaction was created
+    with app.app_context():
+        tx = Transaction.query.filter_by(gateway_payment_id="pi_test123").first()
+        assert tx is not None
+        assert tx.user_id == user_id
+        assert tx.appointment_id == appointment_id
+        assert tx.amount_cents == 3000
+        assert tx.status == "completed"
+
+
+def test_stripe_webhook_invalid_payload(app, client):
+    """Test webhook with invalid payload."""
+    with patch("app.routes.current_app") as mock_app:
+        mock_app.config.get.return_value = "whsec_test"
+        with patch("app.routes.stripe.Webhook.construct_event", side_effect=ValueError):
+            response = client.post(
+                "/stripe-webhook",
+                data=b"invalid",
+                headers={"Stripe-Signature": "sig_test"},
+            )
+    
+    assert response.status_code == 400
+    data = response.get_json()
+    assert data["error"] == "invalid_payload"
+
+
+def test_stripe_webhook_invalid_signature(app, client, stripe_mock):
+    """Test webhook with invalid signature."""
+    with patch("app.routes.current_app") as mock_app:
+        mock_app.config.get.return_value = "whsec_test"
+        stripe_mock.error.SignatureVerificationError = Exception
+        with patch("app.routes.stripe.Webhook.construct_event", side_effect=stripe_mock.error.SignatureVerificationError):
+            response = client.post(
+                "/stripe-webhook",
+                data=b"payload",
+                headers={"Stripe-Signature": "sig_invalid"},
+            )
+    
+    assert response.status_code == 400
+    data = response.get_json()
+    assert data["error"] == "invalid_signature"
+
+
+def test_stripe_webhook_payment_intent_succeeded(app, client, stripe_mock):
+    """Test webhook handling of payment_intent.succeeded event."""
+    with app.app_context():
+        # Create users
+        user = User(name="Test User", email="test@example.com", role="client")
+        vendor = User(name="Vendor", email="vendor@example.com", role="vendor")
+        db.session.add_all([user, vendor])
+        db.session.flush()
+        
+        # Create salon
+        salon = Salon(
+            vendor_id=vendor.user_id,
+            name="Test Salon",
+            address_line1="123 Test St",
+            city="New York",
+            state="NY",
+            postal_code="10001",
+            phone="212-555-0101",
+            is_published=True,
+            verification_status="approved",
+        )
+        db.session.add(salon)
+        db.session.flush()
+        
+        staff = Staff(
+            salon_id=salon.salon_id,
+            user_id=None,
+            title="Stylist",
+        )
+        db.session.add(staff)
+        db.session.flush()
+        
+        service = Service(
+            salon_id=salon.salon_id,
+            name="Haircut",
+            price_cents=3000,
+            duration_minutes=30,
+        )
+        db.session.add(service)
+        db.session.flush()
+        
+        # Create appointment
+        appointment = Appointment(
+            salon_id=salon.salon_id,
+            staff_id=staff.staff_id,
+            service_id=service.service_id,
+            client_id=user.user_id,
+            starts_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            status="booked",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        
+        appointment_id = appointment.appointment_id
+        user_id = user.user_id
+    
+    # Mock webhook event
+    mock_event = {
+        "type": "payment_intent.succeeded",
+        "data": {
+            "object": {
+                "id": "pi_webhook_test",
+                "amount": 3000,
+                "metadata": {
+                    "appointment_id": str(appointment_id),
+                    "client_id": str(user_id),
+                },
+            }
+        },
+    }
+    
+    with patch("app.routes.current_app") as mock_app:
+        mock_app.config.get.return_value = "whsec_test"
+        with patch("app.routes.stripe.Webhook.construct_event", return_value=mock_event):
+            response = client.post(
+                "/stripe-webhook",
+                data=b"payload",
+                headers={"Stripe-Signature": "sig_test"},
+            )
+    
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["received"] is True
+    
+    # Verify transaction was created
+    with app.app_context():
+        tx = Transaction.query.filter_by(gateway_payment_id="pi_webhook_test").first()
+        assert tx is not None
+        assert tx.user_id == user_id
+        assert tx.appointment_id == appointment_id
+        assert tx.amount_cents == 3000
+        assert tx.status == "completed"
