@@ -1,6 +1,8 @@
 """Extended routes for UC 2.5, 2.7, 2.13, 2.14, 2.15."""
 from __future__ import annotations
 
+import random
+import string
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
@@ -366,9 +368,6 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
             return jsonify({"error": "insufficient_points"}), 400
 
         discount_value_cents = points_to_redeem * 5  # 1 point = $0.05
-
-        import random
-        import string
 
         code = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
