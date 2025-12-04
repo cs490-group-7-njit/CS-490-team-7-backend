@@ -318,11 +318,27 @@ class Appointment(db.Model):
             "salon_id": self.salon_id,
             "salon_name": self.salon.name if self.salon else None,
             "staff_id": self.staff_id,
-            "staff_name": self.staff.user.name if self.staff and self.staff.user else None,
+            "staff": {
+                "id": self.staff.staff_id,
+                "user": {
+                    "name": self.staff.user.name,
+                    "email": self.staff.user.email
+                }
+            } if self.staff and self.staff.user else None,
             "service_id": self.service_id,
-            "service_name": self.service.name if self.service else None,
+            "service": {
+                "id": self.service.service_id,
+                "name": self.service.name,
+                "price_cents": self.service.price_cents,
+                "duration_minutes": self.service.duration_minutes
+            } if self.service else None,
             "client_id": self.client_id,
-            "client_name": self.client.name if self.client else None,
+            "client": {
+                "id": self.client.user_id,
+                "name": self.client.name,
+                "email": self.client.email,
+                "phone": self.client.phone
+            } if self.client else None,
             "starts_at": self.starts_at.isoformat() if self.starts_at else None,
             "ends_at": self.ends_at.isoformat() if self.ends_at else None,
             "status": self.status,
