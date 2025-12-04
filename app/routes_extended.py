@@ -351,7 +351,8 @@ def get_loyalty_redemptions(user_id: int) -> tuple[dict[str, object], int]:
 def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
     """Redeem loyalty points for a discount code."""
     try:
-        loyalty = ClientLoyalty.query.filter(ClientLoyalty.user_id == user_id).first()
+        # Get the first loyalty record for this user (could have multiple per salon)
+        loyalty = ClientLoyalty.query.filter_by(client_id=user_id).first()
         if not loyalty:
             return jsonify({"error": "no_loyalty_found"}), 404
 
