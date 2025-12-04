@@ -2657,8 +2657,13 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
             return jsonify({"error": "forbidden", "message": "Only vendors can update appointment status"}), 403
 
         # Vendor can only update appointments at their own salons
-        if appointment.salon_id not in [s.salon_id for s in current_user.salons]:
-            return jsonify({"error": "forbidden", "message": "You can only update appointments at your own salons"}), 403
+        try:
+            vendor_salon_ids = [s.salon_id for s in current_user.salons.all()]
+            if appointment.salon_id not in vendor_salon_ids:
+                return jsonify({"error": "forbidden", "message": "You can only update appointments at your own salons"}), 403
+        except Exception as e:
+            current_app.logger.warning(f"Authorization check failed: {str(e)}")
+            return jsonify({"error": "forbidden", "message": "Authorization failed"}), 403
 
         data = request.get_json()
 
