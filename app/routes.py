@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import stripe
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
-import stripe
 
 from .extensions import db
 from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
@@ -2237,7 +2237,7 @@ def reschedule_appointment(appointment_id: int) -> tuple[dict[str, dict[str, obj
         from datetime import datetime as dt
         from datetime import timedelta
 
-        from .models import Appointment, Staff, TimeBlock, Schedule
+        from .models import Appointment, Schedule, Staff, TimeBlock
 
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
@@ -2650,20 +2650,6 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
         appointment = Appointment.query.get(appointment_id)
         if not appointment:
             return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
-
-        # Only vendors/staff can update appointment status
-        current_user = g.get("current_user")
-        if not current_user or current_user.role != "vendor":
-            return jsonify({"error": "forbidden", "message": "Only vendors can update appointment status"}), 403
-
-        # Vendor can only update appointments at their own salons
-        try:
-            vendor_salon_ids = [s.salon_id for s in current_user.salons.all()]
-            if appointment.salon_id not in vendor_salon_ids:
-                return jsonify({"error": "forbidden", "message": "You can only update appointments at your own salons"}), 403
-        except Exception as e:
-            current_app.logger.warning(f"Authorization check failed: {str(e)}")
-            return jsonify({"error": "forbidden", "message": "Authorization failed"}), 403
 
         data = request.get_json()
 
@@ -7253,8 +7239,6 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
         import os
         import uuid
         from datetime import datetime
-
-        
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
