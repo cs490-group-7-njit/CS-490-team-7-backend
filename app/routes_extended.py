@@ -359,7 +359,10 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
             return jsonify({"error": "no_loyalty_found"}), 404
 
         data = request.get_json()
-        points_to_redeem = data.get("points", 0)
+        if not data:
+            return jsonify({"error": "invalid_request"}), 400
+            
+        points_to_redeem = int(data.get("points", 0))
 
         if points_to_redeem <= 0:
             return jsonify({"error": "invalid_points"}), 400
@@ -367,7 +370,7 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
         if loyalty.points_balance < points_to_redeem:
             return jsonify({"error": "insufficient_points"}), 400
 
-        discount_value_cents = points_to_redeem * 5  # 1 point = $0.05
+        discount_value_cents = int(points_to_redeem * 5)  # 1 point = $0.05
 
         code = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
@@ -386,12 +389,16 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
 
         return jsonify({"redemption": redemption.to_dict()}), 201
 
-    except (ValueError, KeyError) as e:
-        return jsonify({"error": "invalid_request"}), 400
+    except (ValueError, KeyError, TypeError) as e:
+        current_app.logger.warning(f"Invalid redemption request: {e}")
+        return jsonify({"error": "invalid_request", "message": str(e)}), 400
     except SQLAlchemyError as exc:
         db.session.rollback()
         current_app.logger.exception("Failed to redeem points", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
+        return jsonify({"error": "database_error", "message": str(exc)}), 500
+    except Exception as exc:
+        current_app.logger.exception("Unexpected error during redemption", exc_info=exc)
+        return jsonify({"error": "server_error", "message": str(exc)}), 500
 
 
 # UC 2.14 - DISCOUNT ALERTS
