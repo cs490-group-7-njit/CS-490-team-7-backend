@@ -595,6 +595,9 @@ def update_purchase_status(purchase_id: int) -> tuple[dict[str, object], int]:
         purchase.order_status = status
         db.session.commit()
         return jsonify({"purchase": purchase.to_dict()}), 200
+    except Exception as exc:
+        current_app.logger.exception("Failed to update purchase status", exc_info=exc)
+        return jsonify({"error": "update_failed", "message": str(exc)}), 500
 
 
 # ============================================================================
@@ -804,9 +807,3 @@ def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
     except Exception as exc:
         current_app.logger.exception("Failed to get service images", exc_info=exc)
         return jsonify({"error": "fetch_failed", "message": str(exc)}), 500
-    except (ValueError, KeyError) as e:
-        return jsonify({"error": "invalid_request"}), 400
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to update purchase", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
