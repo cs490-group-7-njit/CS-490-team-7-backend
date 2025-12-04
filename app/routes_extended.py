@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
 from .extensions import db
-from .models import (AppointmentImage, ClientLoyalty, DiscountAlert, LoyaltyRedemption, Message,
+from .models import (ClientLoyalty, DiscountAlert, LoyaltyRedemption, Message,
                      Notification, Product, ProductPurchase, Salon, User)
 
 bp_ext = Blueprint("api_ext", __name__)
@@ -604,9 +604,13 @@ def update_purchase_status(purchase_id: int) -> tuple[dict[str, object], int]:
 def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
     """Upload a before/after image for an appointment."""
     try:
-        from .models import Appointment, AppointmentImage
-        import boto3
         import uuid
+        from .models import Appointment, AppointmentImage
+        
+        try:
+            import boto3
+        except ImportError:
+            return jsonify({"error": "s3_unavailable", "message": "Image upload service not configured"}), 503
 
         # Get appointment
         appointment = Appointment.query.get(appointment_id)
@@ -716,7 +720,11 @@ def delete_appointment_image(
     """Delete an image from an appointment."""
     try:
         from .models import AppointmentImage
-        import boto3
+        
+        try:
+            import boto3
+        except ImportError:
+            boto3 = None
 
         # Get image
         image = AppointmentImage.query.get(image_id)
@@ -731,8 +739,8 @@ def delete_appointment_image(
         if not (is_uploader or is_admin):
             return jsonify({"error": "unauthorized"}), 403
 
-        # Delete from S3
-        if image.s3_key:
+        # Delete from S3 if boto3 available
+        if boto3 and image.s3_key:
             try:
                 s3_client = boto3.client("s3")
                 bucket_name = current_app.config.get("AWS_S3_BUCKET", "beautiful-hair-images")
