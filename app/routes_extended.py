@@ -5,12 +5,12 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
 from .extensions import db
-from .models import (ClientLoyalty, DiscountAlert, LoyaltyRedemption, Message,
+from .models import (AppointmentImage, ClientLoyalty, DiscountAlert, LoyaltyRedemption, Message,
                      Notification, Product, ProductPurchase, Salon, User)
 
 bp_ext = Blueprint("api_ext", __name__)
@@ -595,6 +595,206 @@ def update_purchase_status(purchase_id: int) -> tuple[dict[str, object], int]:
         db.session.commit()
         return jsonify({"purchase": purchase.to_dict()}), 200
 
+
+# ============================================================================
+# UC 2.17 - BEFORE/AFTER SERVICE IMAGES
+# ============================================================================
+
+@bp_ext.post("/appointments/<int:appointment_id>/images")
+def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Upload a before/after image for an appointment."""
+    try:
+        from .models import Appointment, AppointmentImage
+        import boto3
+        import uuid
+
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+
+        # Check authorization (vendor or client associated with appointment)
+        current_user_id = g.current_user.user_id if hasattr(g, "current_user") else None
+        is_vendor = (
+            appointment.staff
+            and appointment.staff.user_id == current_user_id
+        )
+        is_client = appointment.client_id == current_user_id
+        is_admin = hasattr(g, "current_user") and g.current_user.role == "admin"
+
+        if not (is_vendor or is_client or is_admin):
+            return jsonify({"error": "unauthorized"}), 403
+
+        # Get image file from request
+        if "image" not in request.files:
+            return jsonify({"error": "no_image_provided"}), 400
+
+        file = request.files["image"]
+        if file.filename == "":
+            return jsonify({"error": "empty_filename"}), 400
+
+        image_type = request.form.get("type", "other")
+        if image_type not in ("before", "after", "other"):
+            image_type = "other"
+
+        description = request.form.get("description", "")
+
+        # Upload to S3
+        s3_client = boto3.client("s3")
+        file_extension = file.filename.split(".")[-1].lower()
+        s3_key = f"appointment-images/{appointment_id}/{image_type}_{uuid.uuid4()}.{file_extension}"
+        bucket_name = current_app.config.get("AWS_S3_BUCKET", "beautiful-hair-images")
+
+        s3_client.upload_fileobj(
+            file,
+            bucket_name,
+            s3_key,
+            ExtraArgs={"ContentType": file.content_type or "image/jpeg"},
+        )
+
+        # Create database record
+        image_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+        appointment_image = AppointmentImage(
+            appointment_id=appointment_id,
+            image_type=image_type,
+            image_url=image_url,
+            s3_key=s3_key,
+            description=description,
+            uploaded_by_id=current_user_id,
+        )
+
+        db.session.add(appointment_image)
+        db.session.commit()
+
+        return jsonify({"image": appointment_image.to_dict()}), 201
+
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to upload appointment image", exc_info=exc)
+        return jsonify({"error": "upload_failed", "message": str(exc)}), 500
+
+
+@bp_ext.get("/appointments/<int:appointment_id>/images")
+def get_appointment_images(appointment_id: int) -> tuple[dict[str, object], int]:
+    """Get all images for an appointment."""
+    try:
+        from .models import Appointment, AppointmentImage
+
+        # Get appointment
+        appointment = Appointment.query.get(appointment_id)
+        if not appointment:
+            return jsonify({"error": "appointment_not_found"}), 404
+
+        # Get images
+        images = AppointmentImage.query.filter_by(appointment_id=appointment_id).all()
+
+        # Group by type
+        images_by_type = {"before": [], "after": [], "other": []}
+        for img in images:
+            images_by_type[img.image_type].append(img.to_dict())
+
+        return (
+            jsonify(
+                {
+                    "appointment_id": appointment_id,
+                    "images": [img.to_dict() for img in images],
+                    "images_by_type": images_by_type,
+                }
+            ),
+            200,
+        )
+
+    except Exception as exc:
+        current_app.logger.exception("Failed to get appointment images", exc_info=exc)
+        return jsonify({"error": "fetch_failed", "message": str(exc)}), 500
+
+
+@bp_ext.delete("/appointments/<int:appointment_id>/images/<int:image_id>")
+def delete_appointment_image(
+    appointment_id: int, image_id: int
+) -> tuple[dict[str, object], int]:
+    """Delete an image from an appointment."""
+    try:
+        from .models import AppointmentImage
+        import boto3
+
+        # Get image
+        image = AppointmentImage.query.get(image_id)
+        if not image or image.appointment_id != appointment_id:
+            return jsonify({"error": "image_not_found"}), 404
+
+        # Check authorization
+        current_user_id = g.current_user.user_id if hasattr(g, "current_user") else None
+        is_uploader = image.uploaded_by_id == current_user_id
+        is_admin = hasattr(g, "current_user") and g.current_user.role == "admin"
+
+        if not (is_uploader or is_admin):
+            return jsonify({"error": "unauthorized"}), 403
+
+        # Delete from S3
+        if image.s3_key:
+            try:
+                s3_client = boto3.client("s3")
+                bucket_name = current_app.config.get("AWS_S3_BUCKET", "beautiful-hair-images")
+                s3_client.delete_object(Bucket=bucket_name, Key=image.s3_key)
+            except Exception as e:
+                current_app.logger.warning(f"Failed to delete S3 object: {e}")
+
+        # Delete from database
+        db.session.delete(image)
+        db.session.commit()
+
+        return jsonify({"success": True}), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete appointment image", exc_info=exc)
+        return jsonify({"error": "delete_failed", "message": str(exc)}), 500
+
+
+@bp_ext.get("/services/<int:service_id>/images")
+def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
+    """Get portfolio images for a service (before/after from appointments)."""
+    try:
+        from .models import (
+            AppointmentImage,
+            Service,
+            Appointment,
+        )
+
+        # Get service
+        service = Service.query.get(service_id)
+        if not service:
+            return jsonify({"error": "service_not_found"}), 404
+
+        # Get all appointments with this service that have images
+        images = (
+            db.session.query(AppointmentImage)
+            .join(Appointment)
+            .filter(Appointment.service_id == service_id)
+            .order_by(AppointmentImage.created_at.desc())
+            .all()
+        )
+
+        # Group by type
+        images_by_type = {"before": [], "after": [], "other": []}
+        for img in images:
+            images_by_type[img.image_type].append(img.to_dict())
+
+        return (
+            jsonify(
+                {
+                    "service_id": service_id,
+                    "images": [img.to_dict() for img in images],
+                    "images_by_type": images_by_type,
+                }
+            ),
+            200,
+        )
+
+    except Exception as exc:
+        current_app.logger.exception("Failed to get service images", exc_info=exc)
+        return jsonify({"error": "fetch_failed", "message": str(exc)}), 500
     except (ValueError, KeyError) as e:
         return jsonify({"error": "invalid_request"}), 400
     except SQLAlchemyError as exc:
