@@ -32,6 +32,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         SECRET_KEY="dev",
         SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL", default_db_uri),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        STRIPE_SECRET_KEY=os.environ.get("STRIPE_SECRET_KEY", "sk_test_51QXKvJC7cRzM0M3GEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOp"),
+        STRIPE_WEBHOOK_SECRET=os.environ.get("STRIPE_WEBHOOK_SECRET", "whsec_test_4eC39HqLyjWDarhtT657tB8f"),
+        ENABLE_PAYMENTS=os.environ.get("ENABLE_PAYMENTS", "true").lower() in ("true", "1", "yes"),
     )
 
     if test_config is not None:
