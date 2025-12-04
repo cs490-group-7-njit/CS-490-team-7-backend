@@ -2651,6 +2651,15 @@ def update_appointment_status(appointment_id: int) -> tuple[dict[str, object], i
         if not appointment:
             return jsonify({"error": "not_found", "message": "Appointment not found"}), 404
 
+        # Only vendors/staff can update appointment status
+        current_user = g.get("current_user")
+        if not current_user or current_user.role != "vendor":
+            return jsonify({"error": "forbidden", "message": "Only vendors can update appointment status"}), 403
+
+        # Vendor can only update appointments at their own salons
+        if appointment.salon_id not in [s.salon_id for s in current_user.salons]:
+            return jsonify({"error": "forbidden", "message": "You can only update appointments at your own salons"}), 403
+
         data = request.get_json()
 
         if "status" not in data:
