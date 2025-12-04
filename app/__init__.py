@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from flasgger import Swagger
 from flask import Flask
 from flask_cors import CORS
-from flasgger import Swagger  
 
 from .extensions import db
 from .routes import bp as api_bp
