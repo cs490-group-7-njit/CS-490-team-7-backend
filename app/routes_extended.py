@@ -1,8 +1,6 @@
 """Extended routes for UC 2.5, 2.7, 2.13, 2.14, 2.15."""
 from __future__ import annotations
 
-import random
-import string
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -353,6 +351,9 @@ def get_loyalty_redemptions(user_id: int) -> tuple[dict[str, object], int]:
 def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
     """Redeem loyalty points for a discount code."""
     try:
+        import random
+        import string
+        
         # Get the first loyalty record for this user (could have multiple per salon)
         loyalty = ClientLoyalty.query.filter_by(client_id=user_id).first()
         if not loyalty:
