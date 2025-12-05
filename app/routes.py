@@ -5625,11 +5625,13 @@ def generate_reports() -> tuple[dict[str, object], int]:
 
         # Generate response based on format
         if output_format == 'json':
-            return jsonify({
+            response_data = {
                 "report_type": "dashboard_summary",
                 "generated_at": now.isoformat(),
                 "data": report_data
-            }), 200
+            }
+            current_app.logger.info(f"Returning JSON report with keys: {list(report_data.keys())}")
+            return jsonify(response_data), 200
 
         elif output_format == 'csv':
             # Generate CSV response
@@ -5659,6 +5661,9 @@ def generate_reports() -> tuple[dict[str, object], int]:
                 headers={'Content-Disposition': f'attachment; filename=dashboard_report_{now.strftime("%Y%m%d")}.csv'}
             )
             return response
+        
+        # Default fallback
+        return jsonify({"error": "invalid_format"}), 400
 
     except Exception as exc:
         current_app.logger.exception("Failed to generate report", exc_info=exc)
