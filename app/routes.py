@@ -4879,10 +4879,19 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             "geographic_distribution": {}
         }
 
-        # User growth over time (monthly)
+        # User growth over time (monthly) - going backwards from end_date
         for i in range(12):
-            month_start = start_date.replace(day=1) + timedelta(days=30*i)
-            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+            # Calculate month by going backwards
+            if end_date.month - i > 0:
+                month_start = end_date.replace(day=1, month=end_date.month - i)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], month=end_date.month - i)
+            else:
+                # Handle year boundary
+                month_num = end_date.month - i
+                year_offset = (month_num - 1) // 12
+                actual_month = ((month_num - 1) % 12) + 1
+                month_start = end_date.replace(day=1, year=end_date.year - 1 - year_offset, month=actual_month)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], year=end_date.year - 1 - year_offset, month=actual_month)
 
             user_count = User.query.filter(
                 User.created_at >= month_start,
@@ -4896,8 +4905,17 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         # Salon growth over time (monthly)
         for i in range(12):
-            month_start = start_date.replace(day=1) + timedelta(days=30*i)
-            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+            # Calculate month by going backwards
+            if end_date.month - i > 0:
+                month_start = end_date.replace(day=1, month=end_date.month - i)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], month=end_date.month - i)
+            else:
+                # Handle year boundary
+                month_num = end_date.month - i
+                year_offset = (month_num - 1) // 12
+                actual_month = ((month_num - 1) % 12) + 1
+                month_start = end_date.replace(day=1, year=end_date.year - 1 - year_offset, month=actual_month)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], year=end_date.year - 1 - year_offset, month=actual_month)
 
             salon_count = Salon.query.filter(
                 Salon.created_at >= month_start,
@@ -4911,8 +4929,17 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         # Appointment trends (monthly)
         for i in range(12):
-            month_start = start_date.replace(day=1) + timedelta(days=30*i)
-            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+            # Calculate month by going backwards
+            if end_date.month - i > 0:
+                month_start = end_date.replace(day=1, month=end_date.month - i)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], month=end_date.month - i)
+            else:
+                # Handle year boundary
+                month_num = end_date.month - i
+                year_offset = (month_num - 1) // 12
+                actual_month = ((month_num - 1) % 12) + 1
+                month_start = end_date.replace(day=1, year=end_date.year - 1 - year_offset, month=actual_month)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], year=end_date.year - 1 - year_offset, month=actual_month)
 
             appointment_count = Appointment.query.filter(
                 Appointment.created_at >= month_start,
@@ -4926,8 +4953,17 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         # Revenue trends (monthly) - assuming appointments have pricing
         for i in range(12):
-            month_start = start_date.replace(day=1) + timedelta(days=30*i)
-            month_end = month_start.replace(day=calendar.monthrange(month_start.year, month_start.month)[1])
+            # Calculate month by going backwards
+            if end_date.month - i > 0:
+                month_start = end_date.replace(day=1, month=end_date.month - i)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], month=end_date.month - i)
+            else:
+                # Handle year boundary
+                month_num = end_date.month - i
+                year_offset = (month_num - 1) // 12
+                actual_month = ((month_num - 1) % 12) + 1
+                month_start = end_date.replace(day=1, year=end_date.year - 1 - year_offset, month=actual_month)
+                month_end = end_date.replace(day=calendar.monthrange(month_start.year, month_start.month)[1], year=end_date.year - 1 - year_offset, month=actual_month)
 
             # Calculate revenue from completed appointments
             revenue = db.session.query(
