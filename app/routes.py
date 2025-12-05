@@ -5485,214 +5485,85 @@ def calculate_growth_rate(previous, current):
 
 @bp.get("/admin/reports")
 def generate_reports() -> tuple[dict[str, object], int]:
-    """Generate comprehensive reports for admin insights (UC 3.10).
+    """Generate a comprehensive report of dashboard metrics (UC 3.10).
 
     Query Parameters:
-    - report_type: 'summary', 'users', 'salons', 'revenue', 'appointments', 'retention', 'full'
-    - format: 'json', 'csv', 'pdf' (default: json)
-    - date_from: Start date in YYYY-MM-DD format (optional)
-    - date_to: End date in YYYY-MM-DD format (optional)
-    - period: '7d', '30d', '90d', '1y' (default: 30d)
+    - format: 'json' or 'csv' (default: json)
     """
     try:
         import csv
         import io
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         # Get query parameters
-        report_type = request.args.get('report_type', 'summary')
         output_format = request.args.get('format', 'json').lower()
-        period = request.args.get('period', '30d')
-        date_from_str = request.args.get('date_from')
-        date_to_str = request.args.get('date_to')
 
-        # Validate parameters
-        valid_report_types = ['summary', 'users', 'salons', 'revenue', 'appointments', 'retention', 'full']
-        if report_type not in valid_report_types:
-            return jsonify({"error": "invalid_report_type", "valid_types": valid_report_types}), 400
-
-        valid_formats = ['json', 'csv', 'pdf']
+        # Validate format
+        valid_formats = ['json', 'csv']
         if output_format not in valid_formats:
             return jsonify({"error": "invalid_format", "valid_formats": valid_formats}), 400
 
-        # Calculate date range
         now = datetime.now(timezone.utc)
-        if date_from_str and date_to_str:
-            try:
-                date_from = datetime.fromisoformat(date_from_str.replace('Z', '+00:00'))
-                date_to = datetime.fromisoformat(date_to_str.replace('Z', '+00:00'))
-            except ValueError:
-                return jsonify({"error": "invalid_date_format", "message": "Use YYYY-MM-DD or ISO format"}), 400
-        else:
-            # Use period-based date range
-            period_days = {
-                '7d': 7, '30d': 30, '90d': 90, '1y': 365
-            }.get(period, 30)
-            date_from = now - timedelta(days=period_days)
-            date_to = now
 
-        # Generate report data based on type
-        report_data = {}
+        # Gather all dashboard data
+        try:
+            platform_stats = get_platform_stats_data() if hasattr(get_platform_stats_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting platform stats", exc_info=e)
+            platform_stats = {}
 
-        if report_type in ['summary', 'full']:
-            # Executive Summary Report
-            report_data["executive_summary"] = {
-                "report_period": {
-                    "from": date_from.isoformat(),
-                    "to": date_to.isoformat(),
-                    "days": (date_to - date_from).days
-                },
-                "key_metrics": {
-                    "total_users": User.query.filter(User.created_at <= date_to).count(),
-                    "new_users_period": User.query.filter(User.created_at >= date_from, User.created_at <= date_to).count(),
-                    "total_salons": Salon.query.filter(Salon.created_at <= date_to).count(),
-                    "active_salons": Salon.query.filter(Salon.is_published == True, Salon.created_at <= date_to).count(),
-                    "total_appointments": Appointment.query.filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to).count(),
-                    "completed_appointments": Appointment.query.filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to, Appointment.status == 'completed').count(),
-                    "total_revenue": float(db.session.query(db.func.sum(Transaction.amount_cents))
-                                         .filter(Transaction.transaction_date >= date_from,
-                                                Transaction.transaction_date <= date_to,
-                                                Transaction.status == 'completed').scalar() or 0)
-                },
-                "growth_rates": {
-                    "user_growth": calculate_growth_rate(
-                        User.query.filter(User.created_at < date_from).count(),
-                        User.query.filter(User.created_at <= date_to).count()
-                    ),
-                    "appointment_growth": calculate_growth_rate(
-                        Appointment.query.filter(Appointment.created_at < date_from).count(),
-                        Appointment.query.filter(Appointment.created_at <= date_to).count()
-                    )
-                }
-            }
+        try:
+            revenue_metrics = get_revenue_metrics_data() if hasattr(get_revenue_metrics_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting revenue metrics", exc_info=e)
+            revenue_metrics = {}
 
-        if report_type in ['users', 'full']:
-            # User Analytics Report
-            report_data["user_analytics"] = {
-                "demographics": {
-                    "by_role": dict(db.session.query(User.role, db.func.count(User.user_id)).group_by(User.role).all()),
-                    "registration_trends": [
-                        {
-                            "month": (date_from + timedelta(days=i*30)).strftime('%Y-%m'),
-                            "registrations": User.query.filter(
-                                User.created_at >= date_from + timedelta(days=i*30),
-                                User.created_at < date_from + timedelta(days=(i+1)*30)
-                            ).count()
-                        } for i in range((date_to - date_from).days // 30 + 1)
-                    ]
-                },
-                "geographic_distribution": {
-                    "top_cities": dict(db.session.query(User.city, db.func.count(User.user_id))
-                                     .filter(User.city.isnot(None))
-                                     .group_by(User.city)
-                                     .order_by(db.func.count(User.user_id).desc())
-                                     .limit(10).all()),
-                    "top_states": dict(db.session.query(User.state, db.func.count(User.user_id))
-                                      .filter(User.state.isnot(None))
-                                      .group_by(User.state)
-                                      .order_by(db.func.count(User.user_id).desc())
-                                      .limit(10).all())
-                }
-            }
+        try:
+            appointment_trends = get_appointment_trends_data() if hasattr(get_appointment_trends_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting appointment trends", exc_info=e)
+            appointment_trends = {}
 
-        if report_type in ['salons', 'full']:
-            # Salon Performance Report
-            report_data["salon_performance"] = {
-                "overview": {
-                    "total_salons": Salon.query.count(),
-                    "published_salons": Salon.query.filter_by(is_published=True).count(),
-                    "verification_status": dict(db.session.query(Salon.verification_status, db.func.count(Salon.salon_id))
-                                              .group_by(Salon.verification_status).all())
-                },
-                "performance_metrics": [
-                    {
-                        "salon_id": salon.salon_id,
-                        "name": salon.name,
-                        "appointments": Appointment.query.filter(
-                            Appointment.salon_id == salon.salon_id,
-                            Appointment.created_at >= date_from,
-                            Appointment.created_at <= date_to
-                        ).count(),
-                        "revenue": float(db.session.query(db.func.sum(Transaction.amount_cents))
-                                       .join(Transaction, Transaction.appointment_id == Appointment.appointment_id)
-                                       .filter(Appointment.salon_id == salon.salon_id,
-                                              Transaction.transaction_date >= date_from,
-                                              Transaction.transaction_date <= date_to,
-                                              Transaction.status == 'completed').scalar() or 0),
-                        "rating": float(db.session.query(db.func.avg(Review.rating))
-                                      .filter(Review.salon_id == salon.salon_id).scalar() or 0)
-                    } for salon in Salon.query.filter_by(is_published=True).all()
-                ]
-            }
+        try:
+            loyalty_program = get_loyalty_program_data() if hasattr(get_loyalty_program_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting loyalty program", exc_info=e)
+            loyalty_program = {}
 
-        if report_type in ['revenue', 'full']:
-            # Revenue Analysis Report
-            report_data["revenue_analysis"] = {
-                "summary": {
-                    "total_revenue": float(db.session.query(db.func.sum(Transaction.amount_cents))
-                                         .filter(Transaction.transaction_date >= date_from,
-                                                Transaction.transaction_date <= date_to,
-                                                Transaction.status == 'completed').scalar() or 0),
-                    "avg_transaction_value": float(db.session.query(db.func.avg(Transaction.amount_cents))
-                                                 .filter(Transaction.transaction_date >= date_from,
-                                                        Transaction.transaction_date <= date_to,
-                                                        Transaction.status == 'completed').scalar() or 0),
-                },
-                "monthly_breakdown": [
-                    {
-                        "month": (date_from + timedelta(days=i*30)).strftime('%Y-%m'),
-                        "revenue": float(db.session.query(db.func.sum(Transaction.amount_cents))
-                                       .filter(Transaction.transaction_date >= date_from + timedelta(days=i*30),
-                                              Transaction.transaction_date < date_from + timedelta(days=(i+1)*30),
-                                              Transaction.status == 'completed').scalar() or 0),
-                        "transactions": Appointment.query.filter(
-                            Appointment.created_at >= date_from + timedelta(days=i*30),
-                            Appointment.created_at < date_from + timedelta(days=(i+1)*30),
-                            Appointment.status == 'completed'
-                        ).count()
-                    } for i in range((date_to - date_from).days // 30 + 1)
-                ],
-                "by_service_category": dict(db.session.query(Salon.business_type, db.func.sum(Transaction.amount_cents))
-                                          .join(Appointment, Appointment.salon_id == Salon.salon_id)
-                                          .join(Transaction, Transaction.appointment_id == Appointment.appointment_id)
-                                          .filter(Transaction.transaction_date >= date_from,
-                                                 Transaction.transaction_date <= date_to,
-                                                 Transaction.status == 'completed')
-                                          .group_by(Salon.business_type).all())
-            }
+        try:
+            pending_actions = get_pending_actions_data() if hasattr(get_pending_actions_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting pending actions", exc_info=e)
+            pending_actions = {}
 
-        if report_type in ['appointments', 'full']:
-            # Appointment Analytics Report
-            report_data["appointment_analytics"] = {
-                "status_breakdown": dict(db.session.query(Appointment.status, db.func.count(Appointment.appointment_id))
-                                       .filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to)
-                                       .group_by(Appointment.status).all()),
-                "hourly_distribution": dict(db.session.query(
-                    db.func.extract('hour', Appointment.starts_at),
-                    db.func.count(Appointment.appointment_id)
-                ).filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to)
-                .group_by(db.func.extract('hour', Appointment.starts_at)).all()),
-                "daily_patterns": {}
-            }
+        try:
+            user_demographics = get_user_demographics_data() if hasattr(get_user_demographics_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting user demographics", exc_info=e)
+            user_demographics = {}
 
-        if report_type in ['retention', 'full']:
-            # Customer Retention Report
-            report_data["retention_analysis"] = {
-                "retention_30d": calculate_30d_retention(date_from, date_to),
-                "cohort_analysis": generate_cohort_data(date_from, date_to),
-                "repeat_customer_rate": calculate_repeat_customer_rate(date_from, date_to)
-            }
+        try:
+            retention_metrics = get_retention_metrics_data() if hasattr(get_retention_metrics_data, '__call__') else {}
+        except Exception as e:
+            current_app.logger.exception("Error getting retention metrics", exc_info=e)
+            retention_metrics = {}
+
+        # Compile report data
+        report_data = {
+            "platform_stats": platform_stats,
+            "revenue_metrics": revenue_metrics,
+            "appointment_trends": appointment_trends,
+            "loyalty_program": loyalty_program,
+            "pending_actions": pending_actions,
+            "user_demographics": user_demographics,
+            "retention_metrics": retention_metrics
+        }
 
         # Generate response based on format
         if output_format == 'json':
             return jsonify({
-                "report_type": report_type,
+                "report_type": "dashboard_summary",
                 "generated_at": now.isoformat(),
-                "parameters": {
-                    "date_from": date_from.isoformat(),
-                    "date_to": date_to.isoformat(),
-                    "period": period
-                },
                 "data": report_data
             }), 200
 
@@ -5702,21 +5573,18 @@ def generate_reports() -> tuple[dict[str, object], int]:
             writer = csv.writer(output)
 
             # Write report header
-            writer.writerow(['Report Type', report_type])
+            writer.writerow(['Dashboard Report'])
             writer.writerow(['Generated At', now.isoformat()])
-            writer.writerow(['Date From', date_from.isoformat()])
-            writer.writerow(['Date To', date_to.isoformat()])
             writer.writerow([])
 
-            # Write data based on report type
-            if report_type == 'summary':
-                writer.writerow(['Metric', 'Value'])
-                for key, value in report_data.get('executive_summary', {}).get('key_metrics', {}).items():
-                    writer.writerow([key.replace('_', ' ').title(), value])
-
-            # For other report types, we'd need more complex CSV generation
-            # For now, return JSON format note
-            writer.writerow(['Note', 'Full CSV export available for summary reports'])
+            # Write each section
+            for section_name, section_data in report_data.items():
+                writer.writerow([section_name.replace('_', ' ').title()])
+                if isinstance(section_data, dict):
+                    for key, value in section_data.items():
+                        if not isinstance(value, (dict, list)):
+                            writer.writerow([key.replace('_', ' ').title(), value])
+                writer.writerow([])
 
             csv_content = output.getvalue()
             output.close()
@@ -5724,23 +5592,13 @@ def generate_reports() -> tuple[dict[str, object], int]:
             response = current_app.response_class(
                 csv_content,
                 mimetype='text/csv',
-                headers={'Content-Disposition': f'attachment; filename={report_type}_report_{now.strftime("%Y%m%d")}.csv'}
+                headers={'Content-Disposition': f'attachment; filename=dashboard_report_{now.strftime("%Y%m%d")}.csv'}
             )
             return response
 
-        elif output_format == 'pdf':
-            # For PDF generation, we'd need a library like reportlab or fpdf
-            # For now, return a note about PDF format
-            return jsonify({
-                "message": "PDF report generation",
-                "note": "PDF format requires additional dependencies (reportlab/fpdf)",
-                "report_type": report_type,
-                "data": report_data
-            }), 200
-
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         current_app.logger.exception("Failed to generate report", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
+        return jsonify({"error": "report_generation_failed", "message": str(exc)}), 500
 
 
 def calculate_30d_retention(date_from, date_to):
@@ -5763,38 +5621,56 @@ def calculate_30d_retention(date_from, date_to):
 
 def generate_cohort_data(date_from, date_to):
     """Generate cohort retention data."""
+    from datetime import timedelta
+    
     cohorts = []
-    for i in range(min(6, (date_to - date_from).days // 30)):
-        cohort_start = date_from + timedelta(days=i*30)
-        cohort_end = cohort_start + timedelta(days=30)
+    try:
+        num_cohorts = min(6, max(1, (date_to - date_from).days // 30))
+        
+        for i in range(num_cohorts):
+            cohort_start = date_from + timedelta(days=i*30)
+            cohort_end = cohort_start + timedelta(days=30)
 
-        cohort_users = User.query.filter(
-            User.created_at >= cohort_start,
-            User.created_at < cohort_end,
-            User.role == 'client'
-        ).count()
-
-        next_month_start = cohort_end
-        next_month_end = next_month_start + timedelta(days=30)
-
-        retained_users = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
-            Appointment.client_id.in_(db.session.query(User.user_id).filter(
+            cohort_users = User.query.filter(
                 User.created_at >= cohort_start,
                 User.created_at < cohort_end,
                 User.role == 'client'
-            )),
-            Appointment.created_at >= next_month_start,
-            Appointment.created_at < next_month_end
-        ).scalar() or 0
+            ).count()
 
-        retention_rate = round((retained_users / cohort_users) * 100, 1) if cohort_users > 0 else 0
+            if cohort_users > 0:
+                next_month_start = cohort_end
+                next_month_end = next_month_start + timedelta(days=30)
+                
+                # Get users from this cohort who had appointments in the next month
+                cohort_user_ids = db.session.query(User.user_id).filter(
+                    User.created_at >= cohort_start,
+                    User.created_at < cohort_end,
+                    User.role == 'client'
+                ).all()
+                
+                cohort_user_ids = [u[0] for u in cohort_user_ids]
+                
+                retained_users = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
+                    Appointment.client_id.in_(cohort_user_ids),
+                    Appointment.created_at >= next_month_start,
+                    Appointment.created_at < next_month_end
+                ).scalar() or 0
+                
+                retention_rate = round((retained_users / cohort_users) * 100, 1)
+            else:
+                retained_users = 0
+                retention_rate = 0
 
-        cohorts.append({
-            "cohort_month": cohort_start.strftime('%Y-%m'),
-            "cohort_size": cohort_users,
-            "retained_next_month": retained_users,
-            "retention_rate": retention_rate
-        })
+            cohorts.append({
+                "cohort_month": cohort_start.strftime('%Y-%m'),
+                "cohort_size": cohort_users,
+                "retained_next_month": retained_users,
+                "retention_rate": retention_rate
+            })
+    except Exception as e:
+        current_app.logger.exception("Error generating cohort data", exc_info=e)
+        # Return empty cohorts on error
+        cohorts = []
 
     return cohorts
 
