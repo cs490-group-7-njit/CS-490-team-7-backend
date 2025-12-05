@@ -5658,12 +5658,15 @@ def generate_reports() -> tuple[dict[str, object], int]:
             csv_content = output.getvalue()
             output.close()
 
-            response = current_app.response_class(
-                csv_content,
-                mimetype='text/csv',
-                headers={'Content-Disposition': f'attachment; filename=dashboard_report_{now.strftime("%Y%m%d")}.csv'}
-            )
-            return response
+            # Return CSV as JSON for frontend compatibility
+            response_data = {
+                "report_type": "dashboard_summary",
+                "generated_at": now.isoformat(),
+                "format": "csv",
+                "data": report_data,
+                "csv_content": csv_content
+            }
+            return jsonify(response_data), 200
         
         # Default fallback
         return jsonify({"error": "invalid_format"}), 400
