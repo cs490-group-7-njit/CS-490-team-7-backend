@@ -4468,6 +4468,185 @@ def get_platform_stats() -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/admin/revenue-metrics")
+def get_revenue_metrics() -> tuple[dict[str, object], int]:
+    """Get real revenue metrics for admin dashboard.
+
+    Returns:
+    - Total revenue across all transactions
+    - Monthly growth percentage
+    - Average salon revenue
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        previous_month_start = (current_month_start - timedelta(days=1)).replace(day=1)
+        previous_month_end = current_month_start - timedelta(seconds=1)
+
+        # Get total revenue (all completed transactions)
+        total_revenue_cents = db.session.query(
+            func.sum(Transaction.amount_cents)
+        ).filter_by(status="completed").scalar() or 0
+
+        # Get current month revenue
+        current_month_revenue = db.session.query(
+            func.sum(Transaction.amount_cents)
+        ).filter(
+            Transaction.status == "completed",
+            Transaction.created_at >= current_month_start,
+            Transaction.created_at < now
+        ).scalar() or 0
+
+        # Get previous month revenue
+        previous_month_revenue = db.session.query(
+            func.sum(Transaction.amount_cents)
+        ).filter(
+            Transaction.status == "completed",
+            Transaction.created_at >= previous_month_start,
+            Transaction.created_at <= previous_month_end
+        ).scalar() or 0
+
+        # Calculate monthly growth percentage
+        if previous_month_revenue > 0:
+            monthly_growth = round(
+                ((current_month_revenue - previous_month_revenue) / previous_month_revenue) * 100,
+                1
+            )
+        else:
+            monthly_growth = 0.0 if current_month_revenue == 0 else 100.0
+
+        # Get average salon revenue
+        # Count published salons (active salons)
+        active_salons_count = Salon.query.filter_by(is_published=True).count()
+        
+        if active_salons_count > 0:
+            avg_salon_revenue = round(total_revenue_cents / active_salons_count / 100, 2)
+        else:
+            avg_salon_revenue = 0.0
+
+        return jsonify({
+            "revenue_metrics": {
+                "total_revenue": {
+                    "cents": int(total_revenue_cents),
+                    "dollars": round(total_revenue_cents / 100, 2)
+                },
+                "monthly_growth": monthly_growth,
+                "current_month_revenue": {
+                    "cents": int(current_month_revenue),
+                    "dollars": round(current_month_revenue / 100, 2)
+                },
+                "previous_month_revenue": {
+                    "cents": int(previous_month_revenue),
+                    "dollars": round(previous_month_revenue / 100, 2)
+                },
+                "avg_salon_revenue": {
+                    "cents": int(avg_salon_revenue * 100),
+                    "dollars": avg_salon_revenue
+                }
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch revenue metrics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/appointment-trends")
+def get_appointment_trends() -> tuple[dict[str, object], int]:
+    """Get real appointment trends for admin dashboard.
+
+    Returns:
+    - Today's appointment count
+    - Weekly growth percentage
+    - Peak hours breakdown
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get today's appointments
+        today_appointments = Appointment.query.filter(
+            Appointment.starts_at >= today_start,
+            Appointment.starts_at <= today_end
+        ).count()
+        
+        # Get this week's appointments (last 7 days)
+        week_ago = now - timedelta(days=7)
+        this_week_appointments = Appointment.query.filter(
+            Appointment.starts_at >= week_ago,
+            Appointment.starts_at <= now
+        ).count()
+        
+        # Get last week's appointments (7 days before this week)
+        two_weeks_ago = now - timedelta(days=14)
+        last_week_appointments = Appointment.query.filter(
+            Appointment.starts_at >= two_weeks_ago,
+            Appointment.starts_at < week_ago
+        ).count()
+        
+        # Calculate weekly growth percentage
+        if last_week_appointments > 0:
+            weekly_growth = round(
+                ((this_week_appointments - last_week_appointments) / last_week_appointments) * 100,
+                1
+            )
+        else:
+            weekly_growth = 0.0 if this_week_appointments == 0 else 100.0
+        
+        # Get peak hours (hourly breakdown for last 7 days)
+        hourly_data = db.session.query(
+            db.func.extract('hour', Appointment.starts_at).label('hour'),
+            db.func.count(Appointment.appointment_id).label('count')
+        ).filter(
+            Appointment.starts_at >= week_ago
+        ).group_by(
+            db.func.extract('hour', Appointment.starts_at)
+        ).order_by(db.func.count(Appointment.appointment_id).desc()).all()
+        
+        # Find peak hours (top hour(s) with most appointments)
+        peak_hours = []
+        if hourly_data:
+            max_count = hourly_data[0][1]
+            for hour, count in hourly_data:
+                if count == max_count:
+                    peak_hours.append(int(hour))
+                else:
+                    break
+        
+        # Format peak hours as time ranges
+        peak_hours_display = ""
+        if peak_hours:
+            if len(peak_hours) == 1:
+                hour = peak_hours[0]
+                peak_hours_display = f"{hour:02d}:00 - {(hour + 1) % 24:02d}:00"
+            else:
+                min_hour = min(peak_hours)
+                max_hour = max(peak_hours)
+                peak_hours_display = f"{min_hour:02d}:00 - {(max_hour + 1) % 24:02d}:00"
+        else:
+            peak_hours_display = "N/A"
+        
+        return jsonify({
+            "appointment_trends": {
+                "today": today_appointments,
+                "this_week": this_week_appointments,
+                "last_week": last_week_appointments,
+                "weekly_growth": weekly_growth,
+                "peak_hours": peak_hours_display,
+                "hourly_breakdown": {int(hour): count for hour, count in hourly_data}
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch appointment trends", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
 @bp.get("/admin/analytics")
 def get_analytics_data() -> tuple[dict[str, object], int]:
     """Get comprehensive analytics data for visualizations (admin only).
