@@ -4254,17 +4254,18 @@ def get_all_users() -> tuple[dict[str, object], int]:
         # Apply status filter (active = last login within 30 days)
         if status:
             thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            # Need to join for the filter, but use distinct to avoid duplicates
+            query = query.outerjoin(AuthAccount, User.user_id == AuthAccount.user_id)
             if status == "active":
-                # Don't join if we already have joinedload
                 query = query.filter(AuthAccount.last_login_at >= thirty_days_ago)
             elif status == "inactive":
-                # For inactive, filter for null or old last_login
                 query = query.filter(
                     db.or_(
                         AuthAccount.last_login_at < thirty_days_ago,
                         AuthAccount.last_login_at.is_(None)
                     )
                 )
+            query = query.distinct(User.user_id)  # Avoid duplicates from join
 
         # Get total count
         total_count = query.count()
