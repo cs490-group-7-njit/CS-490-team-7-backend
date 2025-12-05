@@ -4276,7 +4276,11 @@ def get_all_users() -> tuple[dict[str, object], int]:
             # Calculate total spending
             total_spending = 0
             if user.role == "client":
-                transactions = Transaction.query.filter_by(user_id=user.user_id, status="completed").all()
+                # Use with_entities to avoid loading gateway_payment_id column that doesn't exist in database
+                transactions = db.session.query(
+                    Transaction.transaction_id,
+                    Transaction.amount_cents
+                ).filter_by(user_id=user.user_id, status="completed").all()
                 total_spending = sum(t.amount_cents / 100.0 for t in transactions if t.amount_cents is not None)
 
             # Determine if user is active
@@ -4349,7 +4353,11 @@ def get_user_summary() -> tuple[dict[str, object], int]:
         avg_reviews_per_user = round(total_reviews / total_users if total_users > 0 else 0, 2)
 
         # Calculate average spending per user
-        all_transactions = Transaction.query.filter_by(status="completed").all()
+        # Use with_entities to avoid loading gateway_payment_id column that doesn't exist in database
+        all_transactions = db.session.query(
+            Transaction.transaction_id,
+            Transaction.amount_cents
+        ).filter_by(status="completed").all()
         total_spending = sum(t.amount_cents / 100.0 for t in all_transactions if t.amount_cents is not None)
         avg_spending_per_user = round(total_spending / total_users if total_users > 0 else 0, 2)
 
