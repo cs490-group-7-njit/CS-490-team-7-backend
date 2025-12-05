@@ -4647,6 +4647,89 @@ def get_appointment_trends() -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/admin/loyalty-program")
+def get_loyalty_program_stats() -> tuple[dict[str, object], int]:
+    """Get loyalty program statistics for admin dashboard.
+
+    Returns:
+    - Active members count
+    - Total points redeemed this month
+    - Program usage percentage
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        # Get active members (clients with loyalty records)
+        active_members = db.session.query(
+            db.func.count(db.distinct(ClientLoyalty.client_id))
+        ).filter(ClientLoyalty.points_balance > 0).scalar() or 0
+        
+        # Get total points redeemed this month
+        total_points_redeemed = db.session.query(
+            db.func.sum(LoyaltyRedemption.points_redeemed)
+        ).filter(
+            LoyaltyRedemption.redeemed_at >= month_start,
+            LoyaltyRedemption.redeemed_at <= now
+        ).scalar() or 0
+        
+        # Get total clients for engagement calculation
+        total_clients = User.query.filter_by(role="client").count()
+        
+        # Calculate program usage percentage (active members / total clients)
+        program_usage = round((active_members / total_clients * 100) if total_clients > 0 else 0, 1)
+        
+        return jsonify({
+            "loyalty_program": {
+                "active_members": int(active_members),
+                "points_redeemed_month": int(total_points_redeemed),
+                "program_usage": program_usage,
+                "total_clients": total_clients
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch loyalty program stats", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/pending-actions")
+def get_pending_actions() -> tuple[dict[str, object], int]:
+    """Get pending actions for admin dashboard.
+
+    Returns:
+    - Pending salon verifications
+    """
+    try:
+        # Get pending salon verifications
+        pending_salons = Salon.query.filter_by(
+            verification_status="pending"
+        ).order_by(Salon.created_at.desc()).all()
+        
+        pending_actions = []
+        
+        # Add pending salon verifications
+        for salon in pending_salons:
+            pending_actions.append({
+                "type": "verification",
+                "item": f"Salon Verification",
+                "salon_name": salon.name,
+                "salon_id": salon.salon_id,
+                "priority": "high",
+                "created_at": salon.created_at.isoformat() if salon.created_at else None
+            })
+        
+        return jsonify({
+            "pending_actions": pending_actions
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch pending actions", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
 @bp.get("/admin/analytics")
 def get_analytics_data() -> tuple[dict[str, object], int]:
     """Get comprehensive analytics data for visualizations (admin only).
