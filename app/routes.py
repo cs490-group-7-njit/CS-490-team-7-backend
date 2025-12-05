@@ -5505,59 +5505,123 @@ def generate_reports() -> tuple[dict[str, object], int]:
 
         now = datetime.now(timezone.utc)
 
-        # Gather all dashboard data
-        try:
-            platform_stats = get_platform_stats_data() if hasattr(get_platform_stats_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting platform stats", exc_info=e)
-            platform_stats = {}
+        # Gather all dashboard data directly
+        report_data = {}
 
+        # Platform Stats
         try:
-            revenue_metrics = get_revenue_metrics_data() if hasattr(get_revenue_metrics_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting revenue metrics", exc_info=e)
-            revenue_metrics = {}
+            total_users = User.query.count()
+            total_salons = Salon.query.count()
+            active_salons = Salon.query.filter_by(is_published=True).count()
+            total_appointments = Appointment.query.count()
+            total_reviews = Review.query.count()
+            average_rating = float(db.session.query(db.func.avg(Review.rating)).scalar() or 0)
 
+            report_data["platform_stats"] = {
+                "total_users": total_users,
+                "total_salons": total_salons,
+                "active_salons": active_salons,
+                "total_appointments": total_appointments,
+                "total_reviews": total_reviews,
+                "average_rating": round(average_rating, 2)
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating platform stats", exc_info=e)
+            report_data["platform_stats"] = {"error": str(e)}
+
+        # Revenue Metrics
         try:
-            appointment_trends = get_appointment_trends_data() if hasattr(get_appointment_trends_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting appointment trends", exc_info=e)
-            appointment_trends = {}
+            total_revenue = float(db.session.query(db.func.sum(Transaction.amount_cents))
+                                 .filter(Transaction.status == 'completed').scalar() or 0)
+            monthly_revenue = float(db.session.query(db.func.sum(Transaction.amount_cents))
+                                   .filter(Transaction.status == 'completed',
+                                          Transaction.transaction_date >= now.replace(day=1)).scalar() or 0)
+            avg_transaction = float(db.session.query(db.func.avg(Transaction.amount_cents))
+                                   .filter(Transaction.status == 'completed').scalar() or 0)
 
+            report_data["revenue_metrics"] = {
+                "total_revenue": round(total_revenue / 100, 2),
+                "monthly_revenue": round(monthly_revenue / 100, 2),
+                "avg_transaction_value": round(avg_transaction / 100, 2)
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating revenue metrics", exc_info=e)
+            report_data["revenue_metrics"] = {"error": str(e)}
+
+        # Appointment Trends
         try:
-            loyalty_program = get_loyalty_program_data() if hasattr(get_loyalty_program_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting loyalty program", exc_info=e)
-            loyalty_program = {}
+            todays_appointments = Appointment.query.filter(
+                db.func.date(Appointment.starts_at) == datetime.now(timezone.utc).date()
+            ).count()
+            completed_appointments = Appointment.query.filter(Appointment.status == 'completed').count()
+            pending_appointments = Appointment.query.filter(Appointment.status == 'pending').count()
 
+            report_data["appointment_trends"] = {
+                "todays_appointments": todays_appointments,
+                "completed_total": completed_appointments,
+                "pending_total": pending_appointments
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating appointment trends", exc_info=e)
+            report_data["appointment_trends"] = {"error": str(e)}
+
+        # Loyalty Program
         try:
-            pending_actions = get_pending_actions_data() if hasattr(get_pending_actions_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting pending actions", exc_info=e)
-            pending_actions = {}
+            loyalty_members = LoyaltyMember.query.count()
+            total_points = float(db.session.query(db.func.sum(LoyaltyMember.points_balance)).scalar() or 0)
 
+            report_data["loyalty_program"] = {
+                "active_members": loyalty_members,
+                "total_points_in_circulation": int(total_points)
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating loyalty program data", exc_info=e)
+            report_data["loyalty_program"] = {"error": str(e)}
+
+        # Pending Actions
         try:
-            user_demographics = get_user_demographics_data() if hasattr(get_user_demographics_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting user demographics", exc_info=e)
-            user_demographics = {}
+            pending_verifications = Salon.query.filter(
+                Salon.verification_status != 'verified'
+            ).count()
 
+            report_data["pending_actions"] = {
+                "salons_pending_verification": pending_verifications
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating pending actions", exc_info=e)
+            report_data["pending_actions"] = {"error": str(e)}
+
+        # User Demographics
         try:
-            retention_metrics = get_retention_metrics_data() if hasattr(get_retention_metrics_data, '__call__') else {}
-        except Exception as e:
-            current_app.logger.exception("Error getting retention metrics", exc_info=e)
-            retention_metrics = {}
+            user_roles = db.session.query(User.role, db.func.count(User.user_id)).group_by(User.role).all()
 
-        # Compile report data
-        report_data = {
-            "platform_stats": platform_stats,
-            "revenue_metrics": revenue_metrics,
-            "appointment_trends": appointment_trends,
-            "loyalty_program": loyalty_program,
-            "pending_actions": pending_actions,
-            "user_demographics": user_demographics,
-            "retention_metrics": retention_metrics
-        }
+            report_data["user_demographics"] = {
+                "by_role": dict(user_roles or [])
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating user demographics", exc_info=e)
+            report_data["user_demographics"] = {"error": str(e)}
+
+        # Retention Metrics
+        try:
+            # Simple retention: repeat customers (those with 2+ appointments)
+            repeat_customers = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
+                Appointment.status == 'completed'
+            ).scalar() or 0
+            
+            total_customers = db.session.query(db.func.count(db.distinct(Appointment.client_id))).filter(
+                Appointment.status == 'completed'
+            ).scalar() or 0
+
+            repeat_rate = round((repeat_customers / total_customers * 100), 1) if total_customers > 0 else 0
+
+            report_data["retention_metrics"] = {
+                "repeat_customer_rate": repeat_rate,
+                "total_customers_completed": total_customers
+            }
+        except Exception as e:
+            current_app.logger.exception("Error generating retention metrics", exc_info=e)
+            report_data["retention_metrics"] = {"error": str(e)}
 
         # Generate response based on format
         if output_format == 'json':
