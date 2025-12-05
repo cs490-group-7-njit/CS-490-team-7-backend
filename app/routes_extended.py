@@ -353,7 +353,7 @@ def redeem_loyalty_points(user_id: int) -> tuple[dict[str, object], int]:
     try:
         import random
         import string
-        
+
         # Get the first loyalty record for this user (could have multiple per salon)
         loyalty = ClientLoyalty.query.filter_by(client_id=user_id).first()
         if not loyalty:
@@ -609,6 +609,7 @@ def upload_appointment_image(appointment_id: int) -> tuple[dict[str, object], in
     """Upload a before/after image for an appointment."""
     try:
         import uuid
+
         from .models import Appointment, AppointmentImage
         
         try:
@@ -768,11 +769,7 @@ def delete_appointment_image(
 def get_service_images(service_id: int) -> tuple[dict[str, object], int]:
     """Get portfolio images for a service (before/after from appointments)."""
     try:
-        from .models import (
-            AppointmentImage,
-            Service,
-            Appointment,
-        )
+        from .models import Appointment, AppointmentImage, Service
 
         # Get service
         service = Service.query.get(service_id)
