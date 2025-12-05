@@ -4730,6 +4730,128 @@ def get_pending_actions() -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/admin/user-demographics")
+def get_user_demographics() -> tuple[dict[str, object], int]:
+    """Get user demographics for admin dashboard.
+
+    Returns:
+    - User role distribution (clients, vendors, admins)
+    - Total users by role
+    """
+    try:
+        # Get user counts by role
+        total_users = User.query.count()
+        client_count = User.query.filter_by(role="client").count()
+        vendor_count = User.query.filter_by(role="vendor").count()
+        admin_count = User.query.filter_by(role="admin").count()
+        
+        # Calculate percentages
+        client_pct = round((client_count / total_users * 100) if total_users > 0 else 0, 1)
+        vendor_pct = round((vendor_count / total_users * 100) if total_users > 0 else 0, 1)
+        admin_pct = round((admin_count / total_users * 100) if total_users > 0 else 0, 1)
+        
+        return jsonify({
+            "user_demographics": {
+                "total_users": total_users,
+                "by_role": {
+                    "clients": {
+                        "count": client_count,
+                        "percentage": client_pct
+                    },
+                    "vendors": {
+                        "count": vendor_count,
+                        "percentage": vendor_pct
+                    },
+                    "admins": {
+                        "count": admin_count,
+                        "percentage": admin_pct
+                    }
+                }
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch user demographics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/admin/retention-metrics")
+def get_retention_metrics() -> tuple[dict[str, object], int]:
+    """Get customer retention metrics for admin dashboard.
+
+    Returns:
+    - Repeat customer rate (% of clients with 2+ completed appointments)
+    - Average visits per client
+    - 30-day retention rate
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        thirty_days_ago = now - timedelta(days=30)
+        
+        # Get total clients (users with role='client')
+        total_clients = User.query.filter_by(role="client").count()
+        
+        # Get clients with completed appointments
+        clients_with_appointments = db.session.query(
+            db.func.count(db.distinct(Appointment.client_id))
+        ).filter(
+            Appointment.status == "completed"
+        ).scalar() or 0
+        
+        # Get repeat customers (clients with 2+ completed appointments)
+        repeat_customers = db.session.query(
+            db.func.count(db.distinct(Appointment.client_id))
+        ).filter(
+            Appointment.status == "completed"
+        ).group_by(Appointment.client_id).having(
+            db.func.count(Appointment.appointment_id) > 1
+        ).count()
+        
+        # Calculate repeat rate
+        repeat_rate = round(
+            (repeat_customers / clients_with_appointments * 100) if clients_with_appointments > 0 else 0,
+            1
+        )
+        
+        # Get average visits per client
+        total_completed = Appointment.query.filter_by(status="completed").count()
+        avg_visits = round(
+            (total_completed / clients_with_appointments) if clients_with_appointments > 0 else 0,
+            2
+        )
+        
+        # Get 30-day retention (clients who had appointments in last 30 days)
+        users_active_last_30 = db.session.query(
+            db.func.count(db.distinct(Appointment.client_id))
+        ).filter(
+            Appointment.starts_at >= thirty_days_ago,
+            Appointment.starts_at <= now
+        ).scalar() or 0
+        
+        retention_30d = round(
+            (users_active_last_30 / total_clients * 100) if total_clients > 0 else 0,
+            1
+        )
+        
+        return jsonify({
+            "retention_metrics": {
+                "repeat_customer_rate": repeat_rate,
+                "average_visits_per_client": avg_visits,
+                "retention_30d": retention_30d,
+                "total_clients": total_clients,
+                "clients_with_appointments": clients_with_appointments,
+                "repeat_customers": repeat_customers
+            }
+        }), 200
+
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch retention metrics", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+
 @bp.get("/admin/analytics")
 def get_analytics_data() -> tuple[dict[str, object], int]:
     """Get comprehensive analytics data for visualizations (admin only).
