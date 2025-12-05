@@ -4931,7 +4931,7 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
             # Calculate revenue from completed appointments
             revenue = db.session.query(
-                db.func.sum(Service.price)
+                db.func.sum(Service.price_cents)
             ).join(Appointment).filter(
                 Appointment.created_at >= month_start,
                 Appointment.created_at <= month_end,
@@ -5074,12 +5074,12 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
         salon_revenue = db.session.query(
             Salon.salon_id,
             Salon.name,
-            db.func.sum(Service.price).label('total_revenue'),
+            db.func.sum(Service.price_cents).label('total_revenue'),
             db.func.count(Appointment.appointment_id).label('total_appointments')
         ).join(Appointment).join(Service).filter(
             Appointment.status == "completed"
         ).group_by(Salon.salon_id, Salon.name).order_by(
-            db.func.sum(Service.price).desc()
+            db.func.sum(Service.price_cents).desc()
         ).limit(10).all()
 
         analytics_data["salon_revenue"] = {
@@ -5098,13 +5098,13 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
         # Revenue by salon category/business type
         category_revenue = db.session.query(
             Salon.business_type,
-            db.func.sum(Service.price).label('total_revenue'),
+            db.func.sum(Service.price_cents).label('total_revenue'),
             db.func.count(Appointment.appointment_id).label('total_appointments')
         ).join(Appointment).join(Service).filter(
             Appointment.status == "completed",
             Salon.business_type.isnot(None)
         ).group_by(Salon.business_type).order_by(
-            db.func.sum(Service.price).desc()
+            db.func.sum(Service.price_cents).desc()
         ).all()
 
         analytics_data["revenue_by_category"] = {
@@ -5130,7 +5130,7 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
                     month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
                     
                     revenue = db.session.query(
-                        db.func.sum(Service.price)
+                        db.func.sum(Service.price_cents)
                     ).join(Appointment).join(Salon).filter(
                         Appointment.salon_id == salon_id,
                         Appointment.status == "completed",
@@ -5162,7 +5162,7 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             
             # Points earned (from completed appointments)
             points_earned = db.session.query(
-                db.func.sum(db.func.floor(Service.price / 100))  # 1 point per dollar
+                db.func.sum(db.func.floor(Service.price_cents / 100))  # 1 point per dollar
             ).join(Appointment).filter(
                 Appointment.status == "completed",
                 Appointment.created_at >= month_start,
@@ -5363,7 +5363,7 @@ def get_realtime_analytics() -> tuple[dict[str, object], int]:
                 Appointment.appointment_datetime >= today_start
             ).count(),
             "pending_verifications": Salon.query.filter_by(verification_status="pending").count(),
-            "total_revenue": db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+            "total_revenue": db.session.query(db.func.sum(Service.price_cents)).join(Appointment).filter(
                 Appointment.status == "completed"
             ).scalar() or 0
         }
@@ -5410,12 +5410,12 @@ def get_realtime_analytics() -> tuple[dict[str, object], int]:
                 Appointment.query.filter(Appointment.created_at >= week_start).count()
             ),
             "revenue_growth_mom": calculate_growth_rate(
-                db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+                db.session.query(db.func.sum(Service.price_cents)).join(Appointment).filter(
                     Appointment.created_at >= last_month_start,
                     Appointment.created_at < month_start,
                     Appointment.status == "completed"
                 ).scalar() or 0,
-                db.session.query(db.func.sum(Service.price)).join(Appointment).filter(
+                db.session.query(db.func.sum(Service.price_cents)).join(Appointment).filter(
                     Appointment.created_at >= month_start,
                     Appointment.status == "completed"
                 ).scalar() or 0
@@ -6991,7 +6991,7 @@ def get_salon_payments(salon_id: int) -> tuple[dict[str, object], int]:
         
         for apt in appointments:
             # Get service price (default 50 if not available)
-            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000  # in cents
+            service_price = apt.service.price_cents if apt.service and hasattr(apt.service, 'price_cents') else 5000  # in cents
             
             # Create payment record
             payment = {
@@ -7085,7 +7085,7 @@ def get_salon_payment_stats(salon_id: int) -> tuple[dict[str, object], int]:
         revenue_by_service = {}
         
         for apt in completed_apts:
-            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            service_price = apt.service.price_cents if apt.service and hasattr(apt.service, 'price_cents') else 5000
             total_revenue += service_price
             
             # Group by day
@@ -7196,7 +7196,7 @@ def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, obje
         daily_total = 0
         
         for apt in appointments:
-            service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+            service_price = apt.service.price_cents if apt.service and hasattr(apt.service, 'price_cents') else 5000
             
             payment = {
                 "id": apt.appointment_id,
@@ -7297,7 +7297,7 @@ def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
             customer_map[client_id]["visit_count"] += 1
             if apt.status == "completed":
                 customer_map[client_id]["completed_visits"] += 1
-                service_price = apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
+                service_price = apt.service.price_cents if apt.service and hasattr(apt.service, 'price_cents') else 5000
                 customer_map[client_id]["total_spent_cents"] += service_price
             
             if customer_map[client_id]["last_visit"] is None:
