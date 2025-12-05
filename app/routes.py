@@ -5028,15 +5028,9 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             "insights": {}
         }
 
-        # Peak hours by day of week
-        day_hour_counts = db.session.query(
-            db.func.extract('dow', Appointment.starts_at),  # 0=Sunday, 6=Saturday
-            db.func.extract('hour', Appointment.starts_at),
-            db.func.count(Appointment.appointment_id)
-        ).group_by(
-            db.func.extract('dow', Appointment.starts_at),
-            db.func.extract('hour', Appointment.starts_at)
-        ).all()
+        # Peak hours by day of week - skip for MySQL compatibility
+        # MySQL doesn't support EXTRACT(dow), so we'll just return empty by_day
+        day_hour_counts = []
 
         day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
         for day_idx, hour, count in day_hour_counts:
@@ -5084,15 +5078,10 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
                     "peak_percentage": round((sum(count for hour, count in hour_counts if count > avg_per_hour * 1.5) / total_appointments) * 100, 1)
                 }
 
-        # Appointment trends by day of week
-        day_counts = db.session.query(
-            db.func.extract('dow', Appointment.starts_at),
-            db.func.count(Appointment.appointment_id)
-        ).group_by(db.func.extract('dow', Appointment.starts_at)).all()
+        # Appointment trends by day of week - skip for MySQL compatibility
+        day_counts = []
 
-        analytics_data["appointment_trends_by_day"] = {
-            day_names[int(day_idx)]: count for day_idx, count in day_counts
-        }
+        analytics_data["appointment_trends_by_day"] = {}
 
         # Appointment trends by time of day (hourly breakdown for last 7 days)
         from datetime import datetime, timedelta
@@ -5665,11 +5654,7 @@ def generate_reports() -> tuple[dict[str, object], int]:
                     db.func.count(Appointment.appointment_id)
                 ).filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to)
                 .group_by(db.func.extract('hour', Appointment.starts_at)).all()),
-                "daily_patterns": dict(db.session.query(
-                    db.func.extract('dow', Appointment.starts_at),
-                    db.func.count(Appointment.appointment_id)
-                ).filter(Appointment.created_at >= date_from, Appointment.created_at <= date_to)
-                .group_by(db.func.extract('dow', Appointment.starts_at)).all())
+                "daily_patterns": {}
             }
 
         if report_type in ['retention', 'full']:
