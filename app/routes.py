@@ -3964,8 +3964,6 @@ def verify_salon(salon_id: int) -> tuple[dict[str, object], int]:
         if action == "approve":
             salon.verification_status = "approved"
             salon.is_published = True  # Make salon visible to public
-            salon.verified_at = datetime.now(timezone.utc)
-            salon.admin_notes = admin_notes
             
             # Create notification for vendor
             notification = Notification(
@@ -3979,8 +3977,6 @@ def verify_salon(salon_id: int) -> tuple[dict[str, object], int]:
         elif action == "reject":
             salon.verification_status = "rejected"
             salon.is_published = False  # Keep salon hidden
-            salon.rejected_at = datetime.now(timezone.utc)
-            salon.admin_notes = admin_notes
             
             # Create notification for vendor
             notification = Notification(
