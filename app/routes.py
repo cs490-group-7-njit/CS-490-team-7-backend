@@ -5570,8 +5570,8 @@ def generate_reports() -> tuple[dict[str, object], int]:
 
         # Loyalty Program
         try:
-            loyalty_members = LoyaltyMember.query.count()
-            total_points = float(db.session.query(db.func.sum(LoyaltyMember.points_balance)).scalar() or 0)
+            loyalty_members = ClientLoyalty.query.count()
+            total_points = float(db.session.query(db.func.sum(ClientLoyalty.points_balance)).scalar() or 0)
 
             report_data["loyalty_program"] = {
                 "active_members": loyalty_members,
