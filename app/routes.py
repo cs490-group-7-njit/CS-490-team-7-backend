@@ -3965,27 +3965,9 @@ def verify_salon(salon_id: int) -> tuple[dict[str, object], int]:
             salon.verification_status = "approved"
             salon.is_published = True  # Make salon visible to public
             
-            # Create notification for vendor
-            notification = Notification(
-                user_id=salon.vendor_id,
-                title="Salon Approved",
-                message=f"Your salon '{salon.name}' has been approved and is now live on the platform!",
-                notification_type="salon_approved",
-            )
-            db.session.add(notification)
-            
         elif action == "reject":
             salon.verification_status = "rejected"
             salon.is_published = False  # Keep salon hidden
-            
-            # Create notification for vendor
-            notification = Notification(
-                user_id=salon.vendor_id,
-                title="Salon Application Rejected",
-                message=f"Your salon application for '{salon.name}' has been rejected. Please contact support for more information.",
-                notification_type="salon_rejected",
-            )
-            db.session.add(notification)
 
         db.session.commit()
 
