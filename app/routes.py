@@ -4277,7 +4277,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
             total_spending = 0
             if user.role == "client":
                 transactions = Transaction.query.filter_by(user_id=user.user_id, status="completed").all()
-                total_spending = sum(t.amount for t in transactions if t.amount is not None)
+                total_spending = sum(t.amount_cents / 100.0 for t in transactions if t.amount_cents is not None)
 
             # Determine if user is active
             last_login = None
@@ -4311,7 +4311,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
             }
         }), 200
 
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         current_app.logger.exception("Failed to fetch user data", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
@@ -4350,7 +4350,7 @@ def get_user_summary() -> tuple[dict[str, object], int]:
 
         # Calculate average spending per user
         all_transactions = Transaction.query.filter_by(status="completed").all()
-        total_spending = sum(t.amount for t in all_transactions)
+        total_spending = sum(t.amount_cents / 100.0 for t in all_transactions if t.amount_cents is not None)
         avg_spending_per_user = round(total_spending / total_users if total_users > 0 else 0, 2)
 
         return jsonify({
@@ -4371,7 +4371,7 @@ def get_user_summary() -> tuple[dict[str, object], int]:
             }
         }), 200
 
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         current_app.logger.exception("Failed to fetch user summary", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
