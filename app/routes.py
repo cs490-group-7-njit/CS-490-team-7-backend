@@ -4919,6 +4919,36 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
             last_day = calendar.monthrange(month_start.year, month_start.month)[1]
             month_end = month_start.replace(day=last_day)
 
+            salon_count = Salon.query.filter(
+                Salon.created_at >= month_start,
+                Salon.created_at <= month_end
+            ).count()
+
+            analytics_data["salon_growth"].append({
+                "month": month_start.strftime("%Y-%m"),
+                "count": salon_count
+            })
+
+        # Appointment trends (monthly)
+        for i in range(12):
+            # Calculate month by going backwards from end_date
+            current_date = end_date
+            for _ in range(i):
+                # Move to previous month
+                if current_date.month == 1:
+                    current_date = current_date.replace(year=current_date.year - 1, month=12)
+                else:
+                    current_date = current_date.replace(month=current_date.month - 1)
+            
+            month_start = current_date.replace(day=1)
+            last_day = calendar.monthrange(month_start.year, month_start.month)[1]
+            month_end = month_start.replace(day=last_day)
+
+            appointment_count = Appointment.query.filter(
+                Appointment.created_at >= month_start,
+                Appointment.created_at <= month_end
+            ).count()
+
             analytics_data["appointment_trends"].append({
                 "month": month_start.strftime("%Y-%m"),
                 "count": appointment_count
