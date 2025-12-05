@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import stripe
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -4215,6 +4215,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
     Query Parameters:
     - role: Filter by user role (admin, vendor, client)
+    - status: Filter by activity status (active, inactive)
     - sort_by: Sort by field (created_at, name)
     - order: Sort order (asc, desc)
     - limit: Results per page (default: 50, max: 100)
@@ -4225,6 +4226,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
         # Get query parameters
         role = request.args.get("role", "").strip().lower()
+        status = request.args.get("status", "").strip().lower()
         sort_by = request.args.get("sort_by", "created_at").strip()
         order = request.args.get("order", "desc").strip().lower()
         limit = request.args.get("limit", default=50, type=int)
@@ -4233,6 +4235,8 @@ def get_all_users() -> tuple[dict[str, object], int]:
         # Validate parameters
         if role and role not in ["admin", "vendor", "client"]:
             role = ""
+        if status and status not in ["active", "inactive"]:
+            status = ""
         if sort_by not in ["created_at", "name"]:
             sort_by = "created_at"
         if order not in ["asc", "desc"]:
@@ -4246,6 +4250,26 @@ def get_all_users() -> tuple[dict[str, object], int]:
         # Apply role filter
         if role:
             query = query.filter(User.role == role)
+
+        # Apply status filter if provided
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        if status == "active":
+            # User is active if they have a last_login within 30 days
+            query = query.join(
+                AuthAccount, User.user_id == AuthAccount.user_id
+            ).filter(
+                AuthAccount.last_login_at >= thirty_days_ago
+            )
+        elif status == "inactive":
+            # User is inactive if they have no last_login or last_login is older than 30 days
+            query = query.outerjoin(
+                AuthAccount, User.user_id == AuthAccount.user_id
+            ).filter(
+                or_(
+                    AuthAccount.last_login_at < thirty_days_ago,
+                    AuthAccount.last_login_at.is_(None)
+                )
+            )
 
         # Get total count
         total_count = query.count()
@@ -4266,8 +4290,6 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
         # Build response with activity metrics
         user_list = []
-        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-        
         for user in users:
             # Count user activities
             bookings_count = Appointment.query.filter_by(client_id=user.user_id).count()
