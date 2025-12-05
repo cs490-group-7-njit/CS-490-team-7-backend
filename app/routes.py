@@ -4255,9 +4255,16 @@ def get_all_users() -> tuple[dict[str, object], int]:
         if status:
             thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
             if status == "active":
-                query = query.join(AuthAccount).filter(AuthAccount.last_login_at >= thirty_days_ago)
+                # Don't join if we already have joinedload
+                query = query.filter(AuthAccount.last_login_at >= thirty_days_ago)
             elif status == "inactive":
-                query = query.join(AuthAccount).filter(AuthAccount.last_login_at < thirty_days_ago)
+                # For inactive, filter for null or old last_login
+                query = query.filter(
+                    db.or_(
+                        AuthAccount.last_login_at < thirty_days_ago,
+                        AuthAccount.last_login_at.is_(None)
+                    )
+                )
 
         # Get total count
         total_count = query.count()
@@ -4267,7 +4274,6 @@ def get_all_users() -> tuple[dict[str, object], int]:
             sort_column = User.name
         elif sort_by == "last_login":
             sort_column = AuthAccount.last_login_at
-            query = query.join(AuthAccount)
         else:
             sort_column = User.created_at
 
@@ -4347,7 +4353,7 @@ def get_user_summary() -> tuple[dict[str, object], int]:
         thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
         active_users = (
             User.query
-            .join(AuthAccount)
+            .join(AuthAccount, User.user_id == AuthAccount.user_id)
             .filter(AuthAccount.last_login_at >= thirty_days_ago)
             .count()
         )
