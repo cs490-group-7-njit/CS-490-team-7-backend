@@ -4295,6 +4295,9 @@ def get_all_users() -> tuple[dict[str, object], int]:
             # Determine if user is active
             thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
             last_login = user.auth_account.last_login_at if user.auth_account else None
+            # Handle timezone-naive datetimes
+            if last_login and last_login.tzinfo is None:
+                last_login = last_login.replace(tzinfo=timezone.utc)
             is_active = last_login and last_login >= thirty_days_ago
 
             user_data = user.to_dict_basic()
@@ -5853,7 +5856,11 @@ def get_platform_health() -> tuple[dict[str, object], int]:
         # Calculate uptime based on appointment data availability
         oldest_appointment = Appointment.query.order_by(Appointment.created_at.asc()).first()
         if oldest_appointment:
-            uptime_days = (now - oldest_appointment.created_at).days
+            # Make timezone-aware if needed
+            appt_time = oldest_appointment.created_at
+            if appt_time.tzinfo is None:
+                appt_time = appt_time.replace(tzinfo=timezone.utc)
+            uptime_days = (now - appt_time).days
             uptime_percentage = 99.8  # Typical SLA
         else:
             uptime_days = 0
