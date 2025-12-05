@@ -57,6 +57,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             # Production S3 frontend
             "http://beautiful-hair.s3-website.us-east-2.amazonaws.com",
 
+            # Staging S3 frontend
+            "http://staging-beautiful-hair.s3-website.us-east-2.amazonaws.com",
+
             # Production EC2 backend
             "http://3.129.138.4",
         ],
