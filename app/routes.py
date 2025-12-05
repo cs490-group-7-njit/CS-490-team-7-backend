@@ -4215,8 +4215,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
     Query Parameters:
     - role: Filter by user role (admin, vendor, client)
-    - status: Filter by activity status (active, inactive)
-    - sort_by: Sort by field (created_at, name, last_login)
+    - sort_by: Sort by field (created_at, name)
     - order: Sort order (asc, desc)
     - limit: Results per page (default: 50, max: 100)
     - offset: Pagination offset (default: 0)
@@ -4226,7 +4225,6 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
         # Get query parameters
         role = request.args.get("role", "").strip().lower()
-        status = request.args.get("status", "").strip().lower()
         sort_by = request.args.get("sort_by", "created_at").strip()
         order = request.args.get("order", "desc").strip().lower()
         limit = request.args.get("limit", default=50, type=int)
@@ -4235,9 +4233,7 @@ def get_all_users() -> tuple[dict[str, object], int]:
         # Validate parameters
         if role and role not in ["admin", "vendor", "client"]:
             role = ""
-        if status and status not in ["active", "inactive"]:
-            status = ""
-        if sort_by not in ["created_at", "name", "last_login"]:
+        if sort_by not in ["created_at", "name"]:
             sort_by = "created_at"
         if order not in ["asc", "desc"]:
             order = "desc"
@@ -4251,30 +4247,12 @@ def get_all_users() -> tuple[dict[str, object], int]:
         if role:
             query = query.filter(User.role == role)
 
-        # Apply status filter (active = last login within 30 days)
-        if status:
-            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-            # Need to join for the filter, but use distinct to avoid duplicates
-            query = query.outerjoin(AuthAccount, User.user_id == AuthAccount.user_id)
-            if status == "active":
-                query = query.filter(AuthAccount.last_login_at >= thirty_days_ago)
-            elif status == "inactive":
-                query = query.filter(
-                    db.or_(
-                        AuthAccount.last_login_at < thirty_days_ago,
-                        AuthAccount.last_login_at.is_(None)
-                    )
-                )
-            query = query.distinct(User.user_id)  # Avoid duplicates from join
-
         # Get total count
         total_count = query.count()
 
         # Apply sorting
         if sort_by == "name":
             sort_column = User.name
-        elif sort_by == "last_login":
-            sort_column = AuthAccount.last_login_at
         else:
             sort_column = User.created_at
 
@@ -4288,6 +4266,8 @@ def get_all_users() -> tuple[dict[str, object], int]:
 
         # Build response with activity metrics
         user_list = []
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        
         for user in users:
             # Count user activities
             bookings_count = Appointment.query.filter_by(client_id=user.user_id).count()
@@ -4296,16 +4276,18 @@ def get_all_users() -> tuple[dict[str, object], int]:
             # Calculate total spending
             total_spending = 0
             if user.role == "client":
-                transactions = Transaction.query.filter_by(user_id=user.user_id).all()
-                total_spending = sum(t.amount for t in transactions if t.status == "completed")
+                transactions = Transaction.query.filter_by(user_id=user.user_id, status="completed").all()
+                total_spending = sum(t.amount for t in transactions if t.amount is not None)
 
             # Determine if user is active
-            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-            last_login = user.auth_account.last_login_at if user.auth_account else None
-            # Handle timezone-naive datetimes
-            if last_login and last_login.tzinfo is None:
-                last_login = last_login.replace(tzinfo=timezone.utc)
-            is_active = last_login and last_login >= thirty_days_ago
+            last_login = None
+            is_active = False
+            if user.auth_account:
+                last_login = user.auth_account.last_login_at
+                # Handle timezone-naive datetimes
+                if last_login and last_login.tzinfo is None:
+                    last_login = last_login.replace(tzinfo=timezone.utc)
+                is_active = last_login and last_login >= thirty_days_ago
 
             user_data = user.to_dict_basic()
             user_data.update({
