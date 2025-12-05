@@ -4976,9 +4976,9 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
         # Peak hours analysis - enhanced for UC 3.5
         # Hourly distribution (0-23)
         hour_counts = db.session.query(
-            db.func.extract('hour', Appointment.appointment_datetime),
+            db.func.extract('hour', Appointment.starts_at),
             db.func.count(Appointment.appointment_id)
-        ).group_by(db.func.extract('hour', Appointment.appointment_datetime)).all()
+        ).group_by(db.func.extract('hour', Appointment.starts_at)).all()
 
         analytics_data["peak_hours"] = {
             "hourly": {int(hour): count for hour, count in hour_counts},
@@ -4990,12 +4990,12 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         # Peak hours by day of week
         day_hour_counts = db.session.query(
-            db.func.extract('dow', Appointment.appointment_datetime),  # 0=Sunday, 6=Saturday
-            db.func.extract('hour', Appointment.appointment_datetime),
+            db.func.extract('dow', Appointment.starts_at),  # 0=Sunday, 6=Saturday
+            db.func.extract('hour', Appointment.starts_at),
             db.func.count(Appointment.appointment_id)
         ).group_by(
-            db.func.extract('dow', Appointment.appointment_datetime),
-            db.func.extract('hour', Appointment.appointment_datetime)
+            db.func.extract('dow', Appointment.starts_at),
+            db.func.extract('hour', Appointment.starts_at)
         ).all()
 
         day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -5008,15 +5008,15 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
         # Peak hours by time period
         period_counts = db.session.query(
             db.func.case(
-                (db.func.extract('hour', Appointment.appointment_datetime) < 12, 'morning'),
-                (db.func.extract('hour', Appointment.appointment_datetime) < 17, 'afternoon'),
+                (db.func.extract('hour', Appointment.starts_at) < 12, 'morning'),
+                (db.func.extract('hour', Appointment.starts_at) < 17, 'afternoon'),
                 else_='evening'
             ),
             db.func.count(Appointment.appointment_id)
         ).group_by(
             db.func.case(
-                (db.func.extract('hour', Appointment.appointment_datetime) < 12, 'morning'),
-                (db.func.extract('hour', Appointment.appointment_datetime) < 17, 'afternoon'),
+                (db.func.extract('hour', Appointment.starts_at) < 12, 'morning'),
+                (db.func.extract('hour', Appointment.starts_at) < 17, 'afternoon'),
                 else_='evening'
             )
         ).all()
@@ -5046,9 +5046,9 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
 
         # Appointment trends by day of week
         day_counts = db.session.query(
-            db.func.extract('dow', Appointment.appointment_datetime),
+            db.func.extract('dow', Appointment.starts_at),
             db.func.count(Appointment.appointment_id)
-        ).group_by(db.func.extract('dow', Appointment.appointment_datetime)).all()
+        ).group_by(db.func.extract('dow', Appointment.starts_at)).all()
 
         analytics_data["appointment_trends_by_day"] = {
             day_names[int(day_idx)]: count for day_idx, count in day_counts
@@ -5059,10 +5059,10 @@ def get_analytics_data() -> tuple[dict[str, object], int]:
         week_ago = datetime.now(timezone.utc) - timedelta(days=7)
         
         recent_hourly = db.session.query(
-            db.func.extract('hour', Appointment.appointment_datetime),
+            db.func.extract('hour', Appointment.starts_at),
             db.func.count(Appointment.appointment_id)
         ).filter(Appointment.created_at >= week_ago).group_by(
-            db.func.extract('hour', Appointment.appointment_datetime)
+            db.func.extract('hour', Appointment.starts_at)
         ).all()
 
         analytics_data["recent_hourly_trends"] = {
@@ -5360,7 +5360,7 @@ def get_realtime_analytics() -> tuple[dict[str, object], int]:
             "total_salons": Salon.query.count(),
             "total_appointments": Appointment.query.count(),
             "active_appointments_today": Appointment.query.filter(
-                Appointment.appointment_datetime >= today_start
+                Appointment.starts_at >= today_start
             ).count(),
             "pending_verifications": Salon.query.filter_by(verification_status="pending").count(),
             "total_revenue": db.session.query(db.func.sum(Service.price_cents)).join(Appointment).filter(
