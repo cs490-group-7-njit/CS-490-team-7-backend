@@ -9418,3 +9418,175 @@ def mark_all_notifications_as_read(user_id: int) -> tuple[dict[str, object], int
 
 
 # ============================================================================
+# VENDOR PRODUCT MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@bp.post("/salons/<int:salon_id>/products")
+def create_salon_product(salon_id: int) -> tuple[dict[str, object], int]:
+    """
+    Create a new product for a salon (vendor only).
+    
+    Request body:
+    {
+        "name": "Product Name",
+        "description": "Product description",
+        "price_cents": 1999,
+        "stock_quantity": 50,
+        "category": "Category Name"
+    }
+    
+    Returns:
+      201: Product created
+      400: Invalid parameters
+      403: Not authorized (must be salon vendor)
+      404: Salon not found
+      500: Database error
+    """
+    try:
+        # Get the salon
+        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Check vendor authorization (vendor_id should be in auth header or match salon vendor)
+        vendor_id_str = request.headers.get("X-Vendor-ID")
+        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+            return jsonify({"error": "not_authorized"}), 403
+        
+        # Get request data
+        data = request.get_json() or {}
+        
+        # Validate required fields
+        required_fields = ["name", "price_cents", "stock_quantity"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": "missing_fields", "required": required_fields}), 400
+        
+        # Create product
+        product = Product(
+            salon_id=salon.salon_id or salon.id,
+            name=data["name"].strip(),
+            description=data.get("description", "").strip(),
+            price_cents=int(data["price_cents"]),
+            stock_quantity=int(data["stock_quantity"]),
+            category=data.get("category", "").strip(),
+            is_available=True
+        )
+        
+        db.session.add(product)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "product_created",
+            "product": product.to_dict()
+        }), 201
+        
+    except (ValueError, TypeError) as exc:
+        current_app.logger.exception("Invalid product data", exc_info=exc)
+        return jsonify({"error": "invalid_parameters"}), 400
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to create product", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/salons/<int:salon_id>/products/<int:product_id>")
+def update_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, object], int]:
+    """
+    Update a product for a salon (vendor only).
+    
+    Returns:
+      200: Product updated
+      400: Invalid parameters
+      403: Not authorized
+      404: Salon or product not found
+      500: Database error
+    """
+    try:
+        # Get the salon
+        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Check vendor authorization
+        vendor_id_str = request.headers.get("X-Vendor-ID")
+        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+            return jsonify({"error": "not_authorized"}), 403
+        
+        # Get the product
+        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id or salon.id).first()
+        if not product:
+            return jsonify({"error": "product_not_found"}), 404
+        
+        # Update fields
+        data = request.get_json() or {}
+        
+        if "name" in data:
+            product.name = data["name"].strip()
+        if "description" in data:
+            product.description = data["description"].strip()
+        if "price_cents" in data:
+            product.price_cents = int(data["price_cents"])
+        if "stock_quantity" in data:
+            product.stock_quantity = int(data["stock_quantity"])
+        if "category" in data:
+            product.category = data["category"].strip()
+        if "is_available" in data:
+            product.is_available = bool(data["is_available"])
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "product_updated",
+            "product": product.to_dict()
+        }), 200
+        
+    except (ValueError, TypeError) as exc:
+        current_app.logger.exception("Invalid product data", exc_info=exc)
+        return jsonify({"error": "invalid_parameters"}), 400
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to update product", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/products/<int:product_id>")
+def delete_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, object], int]:
+    """
+    Delete a product from a salon (vendor only).
+    
+    Returns:
+      200: Product deleted
+      403: Not authorized
+      404: Salon or product not found
+      500: Database error
+    """
+    try:
+        # Get the salon
+        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Check vendor authorization
+        vendor_id_str = request.headers.get("X-Vendor-ID")
+        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+            return jsonify({"error": "not_authorized"}), 403
+        
+        # Get and delete the product
+        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id or salon.id).first()
+        if not product:
+            return jsonify({"error": "product_not_found"}), 404
+        
+        db.session.delete(product)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "product_deleted"
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to delete product", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
