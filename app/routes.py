@@ -8901,76 +8901,39 @@ def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
         except (ValueError, TypeError):
             return jsonify({"error": "invalid_date_format"}), 400
         
-        # Create discount alerts for target clients
-        alerts_created = 0
-        
-        if target_clients == "all":
-            # Get all existing clients of this salon
-            existing_clients = db.session.query(Appointment.client_id).filter(
-                Appointment.salon_id == salon_id
-            ).distinct().all()
+        # Create a promotion record instead of individual discount alerts
+        # This allows the promotion to be shown to all clients without needing
+        # to know who the clients are at creation time
+        try:
+            start_date_dt = datetime.now(timezone.utc)  # Promotions start immediately
             
-            for (client_id,) in existing_clients:
-                alert = DiscountAlert(
-                    user_id=client_id,
-                    salon_id=salon_id,
-                    discount_percentage=discount_percentage,
-                    discount_cents=discount_cents,
-                    description=description,
-                    expires_at=expires_at_dt,
-                    is_read=False,
-                    is_dismissed=False
-                )
-                db.session.add(alert)
-                alerts_created += 1
-                
-                # Create notification for client
-                notification = Notification(
-                    user_id=client_id,
-                    title="Special Promotion",
-                    message=f"Great news! {salon.name} has a special promotion for you: {description}",
-                    notification_type="discount_alert"
-                )
-                db.session.add(notification)
-        
-        elif isinstance(target_clients, list) and len(target_clients) > 0:
-            # Create promotions for specific clients
-            for client_id in target_clients:
-                # Verify client exists
-                client = User.query.get(client_id)
-                if not client:
-                    continue
-                
-                alert = DiscountAlert(
-                    user_id=client_id,
-                    salon_id=salon_id,
-                    discount_percentage=discount_percentage,
-                    discount_cents=discount_cents,
-                    description=description,
-                    expires_at=expires_at_dt,
-                    is_read=False,
-                    is_dismissed=False
-                )
-                db.session.add(alert)
-                alerts_created += 1
-                
-                # Create notification for client
-                notification = Notification(
-                    user_id=client_id,
-                    title="Special Promotion",
-                    message=f"Great news! {salon.name} has a special promotion for you: {description}",
-                    notification_type="discount_alert"
-                )
-                db.session.add(notification)
-        
-        db.session.commit()
-        
-        return jsonify({
-            "message": "Promotion created successfully",
-            "alerts_created": alerts_created,
-            "description": description,
-            "expires_at": expires_at_dt.isoformat()
-        }), 201
+            promotion = Promotion(
+                salon_id=salon_id,
+                vendor_id=int(vendor_id),
+                title=description[:200],  # Use description as title if not provided
+                description=description,
+                discount_percent=discount_percentage if discount_percentage > 0 else None,
+                discount_amount_cents=discount_cents if discount_percentage == 0 else None,
+                target_customers=target_clients,
+                start_date=start_date_dt,
+                end_date=expires_at_dt,
+                is_active=True
+            )
+            
+            db.session.add(promotion)
+            db.session.commit()
+            
+            return jsonify({
+                "message": "Promotion created successfully",
+                "promotion_id": promotion.promotion_id,
+                "description": description,
+                "expires_at": expires_at_dt.isoformat()
+            }), 201
+            
+        except SQLAlchemyError as exc:
+            db.session.rollback()
+            current_app.logger.exception("Failed to create promotion", exc_info=exc)
+            return jsonify({"error": "database_error"}), 500
         
     except SQLAlchemyError as exc:
         db.session.rollback()
@@ -9017,11 +8980,12 @@ def get_salon_promotions(salon_id: int) -> tuple[dict[str, object], int]:
         if salon.vendor_id != vendor_id:
             return jsonify({"error": "unauthorized", "message": "Vendor does not own this salon"}), 403
         
-        # Get active promotions (non-expired discount alerts)
-        promotions = DiscountAlert.query.filter(
-            DiscountAlert.salon_id == salon_id,
-            DiscountAlert.expires_at > datetime.now(timezone.utc)
-        ).order_by(DiscountAlert.created_at.desc()).all()
+        # Get active promotions (non-expired)
+        promotions = Promotion.query.filter(
+            Promotion.salon_id == salon_id,
+            Promotion.end_date > datetime.now(timezone.utc),
+            Promotion.is_active == True
+        ).order_by(Promotion.created_at.desc()).all()
         
         promotion_data = [promo.to_dict() for promo in promotions]
         
@@ -9188,32 +9152,27 @@ def get_promotion_stats(salon_id: int) -> tuple[dict[str, object], int]:
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
-        # Count total promotions (DiscountAlerts for this salon)
-        total_promotions = DiscountAlert.query.filter(
-            DiscountAlert.salon_id == salon_id
+        # Count total promotions
+        total_promotions = Promotion.query.filter(
+            Promotion.salon_id == salon_id
         ).count()
         
         # Count active promotions (not expired)
         from datetime import datetime, timezone
-        active_promotions = DiscountAlert.query.filter(
-            DiscountAlert.salon_id == salon_id,
-            DiscountAlert.expires_at > datetime.now(timezone.utc)
+        active_promotions = Promotion.query.filter(
+            Promotion.salon_id == salon_id,
+            Promotion.end_date > datetime.now(timezone.utc),
+            Promotion.is_active == True
         ).count()
         
-        # Count inactive promotions (expired)
+        # Count inactive promotions (expired or inactive)
         inactive_promotions = total_promotions - active_promotions
         
         # For now, these are calculated from available data
         total_send_campaigns = total_promotions
-        total_recipients_targeted = DiscountAlert.query.filter(
-            DiscountAlert.salon_id == salon_id
-        ).count()
+        total_recipients_targeted = 0  # Not tracked in Promotion model yet
         
-        average_recipients_per_campaign = (
-            total_recipients_targeted / total_send_campaigns 
-            if total_send_campaigns > 0 
-            else 0
-        )
+        average_recipients_per_campaign = 0  # Not tracked in Promotion model yet
         
         return jsonify({
             "total_promotions": total_promotions,
