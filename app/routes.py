@@ -9444,13 +9444,13 @@ def create_salon_product(salon_id: int) -> tuple[dict[str, object], int]:
     """
     try:
         # Get the salon
-        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        salon = Salon.query.filter_by(salon_id=salon_id).first()
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
         # Check vendor authorization (vendor_id should be in auth header or match salon vendor)
         vendor_id_str = request.headers.get("X-Vendor-ID")
-        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+        if not vendor_id_str or int(vendor_id_str) != salon.vendor_id:
             return jsonify({"error": "not_authorized"}), 403
         
         # Get request data
@@ -9463,7 +9463,7 @@ def create_salon_product(salon_id: int) -> tuple[dict[str, object], int]:
         
         # Create product
         product = Product(
-            salon_id=salon.salon_id or salon.id,
+            salon_id=salon.salon_id,
             name=data["name"].strip(),
             description=data.get("description", "").strip(),
             price_cents=int(data["price_cents"]),
@@ -9503,17 +9503,17 @@ def update_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, obje
     """
     try:
         # Get the salon
-        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        salon = Salon.query.filter_by(salon_id=salon_id).first()
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
         # Check vendor authorization
         vendor_id_str = request.headers.get("X-Vendor-ID")
-        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+        if not vendor_id_str or int(vendor_id_str) != salon.vendor_id:
             return jsonify({"error": "not_authorized"}), 403
         
         # Get the product
-        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id or salon.id).first()
+        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id).first()
         if not product:
             return jsonify({"error": "product_not_found"}), 404
         
@@ -9562,17 +9562,17 @@ def delete_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, obje
     """
     try:
         # Get the salon
-        salon = Salon.query.filter_by(id=salon_id).first() or Salon.query.filter_by(salon_id=salon_id).first()
+        salon = Salon.query.filter_by(salon_id=salon_id).first()
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
         
         # Check vendor authorization
         vendor_id_str = request.headers.get("X-Vendor-ID")
-        if not vendor_id_str or int(vendor_id_str) != (salon.vendor_id or salon.id):
+        if not vendor_id_str or int(vendor_id_str) != salon.vendor_id:
             return jsonify({"error": "not_authorized"}), 403
         
         # Get and delete the product
-        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id or salon.id).first()
+        product = Product.query.filter_by(product_id=product_id, salon_id=salon.salon_id).first()
         if not product:
             return jsonify({"error": "product_not_found"}), 404
         
