@@ -35,7 +35,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         STRIPE_SECRET_KEY=os.environ.get("STRIPE_SECRET_KEY", "sk_test_51QXKvJC7cRzM0M3GEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOp"),
         STRIPE_WEBHOOK_SECRET=os.environ.get("STRIPE_WEBHOOK_SECRET", "whsec_test_4eC39HqLyjWDarhtT657tB8f"),
         ENABLE_PAYMENTS=os.environ.get("ENABLE_PAYMENTS", "true").lower() in ("true", "1", "yes"),
-        AWS_S3_BUCKET=os.environ.get("AWS_S3_BUCKET", "beautiful-hair"),
     )
 
     if test_config is not None:

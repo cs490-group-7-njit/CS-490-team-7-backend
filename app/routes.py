@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import boto3
 import stripe
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
@@ -8221,30 +8220,22 @@ def upload_salon_image(salon_id: int) -> tuple[dict[str, object], int]:
         
         description = request.form.get('description', '')
         
-        # Save to S3
-        import uuid
-        s3_key = f"salon-images/{salon_id}/{uuid.uuid4().hex}_{file.filename}"
+        # Read file data into memory
+        file_data = file.read()
+        if not file_data:
+            return jsonify({"error": "empty_file"}), 400
         
-        try:
-            s3_client = boto3.client('s3')
-            s3_client.upload_fileobj(
-                file,
-                current_app.config['AWS_S3_BUCKET'],
-                s3_key,
-                ExtraArgs={'ContentType': file.content_type}
-            )
-        except Exception as e:
-            current_app.logger.error(f"S3 upload failed: {e}")
-            return jsonify({"error": "upload_failed"}), 500
+        # Check file size (max 5MB)
+        if len(file_data) > 5 * 1024 * 1024:
+            return jsonify({"error": "file_too_large"}), 400
         
-        # Create database record
-        image_url = f"https://{current_app.config['AWS_S3_BUCKET']}.s3.amazonaws.com/{s3_key}"
-        
+        # Create database record with image stored directly in RDS
         salon_image = SalonImage(
             salon_id=salon_id,
             image_type=image_type,
-            image_url=image_url,
-            s3_key=s3_key,
+            image_data=file_data,
+            image_mime_type=file.content_type,
+            filename=file.filename,
             description=description,
             uploaded_by_id=vendor_id,
         )
@@ -8323,6 +8314,50 @@ def get_salon_images(salon_id: int) -> tuple[dict[str, object], int]:
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/salons/<int:salon_id>/images/<int:image_id>/data")
+def get_salon_image_data(salon_id: int, image_id: int):
+    """Get image binary data for a salon image.
+    ---
+    tags:
+      - Salons
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: image_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: Image data
+      404:
+        description: Not found
+    """
+    try:
+        image = SalonImage.query.filter_by(image_id=image_id, salon_id=salon_id).first()
+        if not image:
+            return jsonify({"error": "image_not_found"}), 404
+        
+        from flask import send_file
+        from io import BytesIO
+        
+        # Return binary image data with proper MIME type
+        return send_file(
+            BytesIO(image.image_data),
+            mimetype=image.image_mime_type,
+            as_attachment=False,
+            download_name=image.filename
+        )
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Error fetching salon image data", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
 @bp.delete("/salons/<int:salon_id>/images/<int:image_id>")
 def delete_salon_image(salon_id: int, image_id: int) -> tuple[dict[str, object], int]:
     """Delete a salon image (vendor only).
@@ -8364,18 +8399,7 @@ def delete_salon_image(salon_id: int, image_id: int) -> tuple[dict[str, object],
         if salon.vendor_id != vendor_id:
             return jsonify({"error": "unauthorized"}), 403
         
-        # Delete from S3
-        if image.s3_key:
-            try:
-                s3_client = boto3.client('s3')
-                s3_client.delete_object(
-                    Bucket=current_app.config['AWS_S3_BUCKET'],
-                    Key=image.s3_key
-                )
-            except Exception as e:
-                current_app.logger.warning(f"Failed to delete S3 object: {e}")
-        
-        # Delete from database
+        # Delete from database (image data is deleted automatically)
         db.session.delete(image)
         db.session.commit()
         

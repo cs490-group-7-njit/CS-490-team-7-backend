@@ -1011,8 +1011,9 @@ class SalonImage(db.Model):
         nullable=False,
         server_default="gallery",
     )
-    image_url = db.Column(db.String(500), nullable=False)
-    s3_key = db.Column(db.String(500))  # S3 object key for direct access
+    image_data = db.Column(db.LargeBinary, nullable=False)  # Binary image data stored in RDS
+    image_mime_type = db.Column(db.String(50), nullable=False, default="image/jpeg")  # MIME type (image/jpeg, image/png, etc.)
+    filename = db.Column(db.String(255), nullable=False)  # Original filename
     description = db.Column(db.Text)
     uploaded_by_id = db.Column(db.Integer, db.ForeignKey("users.user_id"))
     created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
@@ -1026,15 +1027,19 @@ class SalonImage(db.Model):
     salon = db.relationship("Salon")
     uploaded_by = db.relationship("User")
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "id": self.image_id,
+    def to_dict(self, include_image_data=False) -> dict[str, object]:
+        result = {
+            "image_id": self.image_id,
             "salon_id": self.salon_id,
             "image_type": self.image_type,
-            "image_url": self.image_url,
-            "s3_key": self.s3_key,
+            "filename": self.filename,
             "description": self.description,
             "uploaded_by_id": self.uploaded_by_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+        if include_image_data:
+            import base64
+            result["image_data"] = base64.b64encode(self.image_data).decode('utf-8')
+            result["image_mime_type"] = self.image_mime_type
+        return result
