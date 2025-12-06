@@ -7315,7 +7315,7 @@ def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
             customer_map[client_id]["appointments"].append({
                 "appointment_id": apt.appointment_id,
                 "service": apt.service.name if apt.service else "Unknown",
-                "staff": apt.staff.name if apt.staff else "Unknown",
+                "staff": apt.staff.user.name if apt.staff and apt.staff.user else "Unknown",
                 "date": apt.created_at.isoformat(),
                 "status": apt.status,
                 "amount": apt.service.price if apt.service and hasattr(apt.service, 'price') else 5000
