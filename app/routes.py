@@ -14,7 +14,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .extensions import db
 from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
                      LoyaltyRedemption, Message, Notification, Product,
-                     ProductPurchase, Review, Salon, Service, Staff,
+                     ProductPurchase, Promotion, Review, Salon, Service, Staff,
                      StaffRating, Transaction, User)
 
 bp = Blueprint("api", __name__)
