@@ -65,7 +65,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ],
         "supports_credentials": True
     }},
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Vendor-ID"],
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 )
 
