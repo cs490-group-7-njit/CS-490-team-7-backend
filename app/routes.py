@@ -593,10 +593,10 @@ def register_user() -> tuple[dict[str, object], int]:
             400,
         )
 
-    # Security: Only allow 'client' or 'vendor' registration via this public endpoint
-    if role not in ["client", "vendor"]:
+    # Security: Only allow 'client', 'vendor', or 'barber' registration via this public endpoint
+    if role not in ["client", "vendor", "barber"]:
         return (
-            jsonify({"error": "invalid_role", "message": "role must be 'client' or 'vendor'"}),
+            jsonify({"error": "invalid_role", "message": "role must be 'client', 'vendor', or 'barber'"}),
             400,
         )
 
@@ -743,8 +743,8 @@ def login() -> tuple[dict[str, object], int]:
 
     user, auth_account = record
 
-    # Allow login for all valid user roles (client, vendor, admin)
-    valid_roles = ["client", "vendor", "admin"]
+    # Allow login for all valid user roles (client, vendor, admin, barber)
+    valid_roles = ["client", "vendor", "admin", "barber"]
     if user.role not in valid_roles:
         return jsonify({"error": "forbidden", "message": f"invalid user role: {user.role}"}), 403
 
@@ -9588,5 +9588,203 @@ def delete_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, obje
         current_app.logger.exception("Failed to delete product", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
+
+# --- BEGIN: Barber Role Management (UC 3.0) ---
+
+@bp.get("/barbers/me/staff")
+@_require_token
+def get_barber_staff_record(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Get the staff record for the authenticated barber user.
+    
+    This endpoint returns the Staff record linked to the barber's user_id,
+    which is needed for barber-specific operations like viewing schedule and blocking time.
+    
+    ---
+    tags:
+      - Barber
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Staff record for barber
+      404:
+        description: No staff record found for this barber
+      403:
+        description: User is not a barber
+      401:
+        description: Unauthorized (invalid or missing token)
+    """
+    user_id = claims.get("user_id")
+    role = claims.get("role")
+    
+    if role != "barber":
+        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "not_found", "message": "User not found"}), 404
+        
+        # Find the staff record for this barber
+        staff = Staff.query.filter_by(user_id=user_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "No staff record found for this barber"}), 404
+        
+        return jsonify({
+            "staff": staff.to_dict(),
+            "salon_id": staff.salon_id,
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to get barber staff record", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/barbers/me/daily-schedule")
+@_require_token
+def get_barber_daily_schedule(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Get the daily schedule for the authenticated barber.
+    
+    Returns all appointments for the barber on the specified date.
+    
+    ---
+    tags:
+      - Barber
+    parameters:
+      - name: date
+        in: query
+        type: string
+        required: false
+        description: Date in YYYY-MM-DD format (defaults to today)
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Daily schedule with appointments
+      404:
+        description: No staff record found
+      403:
+        description: User is not a barber
+      400:
+        description: Invalid date format
+    """
+    user_id = claims.get("user_id")
+    role = claims.get("role")
+    
+    if role != "barber":
+        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    
+    try:
+        # Get barber's staff record
+        staff = Staff.query.filter_by(user_id=user_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "No staff record found for this barber"}), 404
+        
+        # Get date parameter or use today
+        date_str = request.args.get("date")
+        if date_str:
+            try:
+                date = datetime.fromisoformat(date_str).date()
+            except ValueError:
+                return jsonify({"error": "invalid_request", "message": "Invalid date format, use YYYY-MM-DD"}), 400
+        else:
+            date = datetime.now(timezone.utc).date()
+        
+        # Get appointments for this barber on the date
+        start_of_day = datetime.combine(date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_of_day = datetime.combine(date, datetime.max.time()).replace(tzinfo=timezone.utc)
+        
+        appointments = Appointment.query.filter(
+            Appointment.staff_id == staff.staff_id,
+            Appointment.scheduled_at >= start_of_day,
+            Appointment.scheduled_at <= end_of_day
+        ).all()
+        
+        return jsonify({
+            "date": date.isoformat(),
+            "staff_id": staff.staff_id,
+            "salon_id": staff.salon_id,
+            "appointments": [appt.to_dict() for appt in appointments],
+            "total_appointments": len(appointments),
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to get barber daily schedule", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/barbers/me/time-blocks")
+@_require_token
+def get_barber_time_blocks(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Get time blocks (unavailable times) for the authenticated barber.
+    
+    Returns all time blocks (breaks, lunch, unavailable times) for the barber
+    on the specified date or date range.
+    
+    ---
+    tags:
+      - Barber
+    parameters:
+      - name: date
+        in: query
+        type: string
+        required: false
+        description: Date in YYYY-MM-DD format (defaults to today)
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: List of time blocks
+      404:
+        description: No staff record found
+      403:
+        description: User is not a barber
+      400:
+        description: Invalid date format
+    """
+    user_id = claims.get("user_id")
+    role = claims.get("role")
+    
+    if role != "barber":
+        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    
+    try:
+        # Get barber's staff record
+        staff = Staff.query.filter_by(user_id=user_id).first()
+        if not staff:
+            return jsonify({"error": "not_found", "message": "No staff record found for this barber"}), 404
+        
+        # Get date parameter or use today
+        date_str = request.args.get("date")
+        if date_str:
+            try:
+                date = datetime.fromisoformat(date_str).date()
+            except ValueError:
+                return jsonify({"error": "invalid_request", "message": "Invalid date format, use YYYY-MM-DD"}), 400
+        else:
+            date = datetime.now(timezone.utc).date()
+        
+        # Get time blocks for this barber on the date
+        start_of_day = datetime.combine(date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_of_day = datetime.combine(date, datetime.max.time()).replace(tzinfo=timezone.utc)
+        
+        time_blocks = TimeBlock.query.filter(
+            TimeBlock.staff_id == staff.staff_id,
+            TimeBlock.starts_at >= start_of_day,
+            TimeBlock.ends_at <= end_of_day
+        ).all()
+        
+        return jsonify({
+            "date": date.isoformat(),
+            "staff_id": staff.staff_id,
+            "time_blocks": [block.to_dict() for block in time_blocks],
+            "total_blocks": len(time_blocks),
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to get barber time blocks", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+# --- END: Barber Role Management ---
 
 # ============================================================================

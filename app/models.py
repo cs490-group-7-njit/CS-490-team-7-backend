@@ -30,6 +30,7 @@ class User(db.Model):
             "client",
             "vendor",
             "admin",
+            "barber",
             name="user_role",
             native_enum=False,
             validate_strings=True,
