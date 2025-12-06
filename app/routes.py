@@ -8907,13 +8907,22 @@ def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
         try:
             start_date_dt = datetime.now(timezone.utc)  # Promotions start immediately
             
+            # Determine if this is a percentage or fixed amount discount
+            discount_percent = None
+            discount_amount_cents = None
+            
+            if discount_percentage is not None and discount_percentage > 0:
+                discount_percent = discount_percentage
+            else:
+                discount_amount_cents = discount_cents
+            
             promotion = Promotion(
                 salon_id=salon_id,
                 vendor_id=int(vendor_id),
                 title=description[:200],  # Use description as title if not provided
                 description=description,
-                discount_percent=discount_percentage if discount_percentage > 0 else None,
-                discount_amount_cents=discount_cents if discount_percentage == 0 else None,
+                discount_percent=discount_percent,
+                discount_amount_cents=discount_amount_cents,
                 target_customers=target_clients,
                 start_date=start_date_dt,
                 end_date=expires_at_dt,
@@ -8934,11 +8943,10 @@ def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
             db.session.rollback()
             current_app.logger.exception("Failed to create promotion", exc_info=exc)
             return jsonify({"error": "database_error"}), 500
-        
-    except SQLAlchemyError as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed to create promotion", exc_info=exc)
-        return jsonify({"error": "database_error"}), 500
+    
+    except Exception as exc:
+        current_app.logger.exception("Unexpected error creating promotion", exc_info=exc)
+        return jsonify({"error": "server_error", "message": str(exc)}), 500
 
 
 @bp.get("/salons/<int:salon_id>/promotions")
@@ -9158,7 +9166,6 @@ def get_promotion_stats(salon_id: int) -> tuple[dict[str, object], int]:
         ).count()
         
         # Count active promotions (not expired)
-        from datetime import datetime, timezone
         active_promotions = Promotion.query.filter(
             Promotion.salon_id == salon_id,
             Promotion.end_date > datetime.now(timezone.utc),
