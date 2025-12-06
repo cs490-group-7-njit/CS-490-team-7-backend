@@ -9299,3 +9299,122 @@ def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
 
 
 # ============================================================================
+# NOTIFICATION ENDPOINTS
+# ============================================================================
+
+@bp.get("/users/<int:user_id>/notifications")
+def get_user_notifications(user_id: int) -> tuple[dict[str, object], int]:
+    """
+    Get notifications for a user with optional filtering.
+    
+    Query Parameters:
+    - unread_only: bool (default: false) - Filter to only unread notifications
+    - page: int (default: 1) - Pagination page number
+    - limit: int (default: 20) - Notifications per page
+    
+    Returns:
+      200: List of notifications
+      404: User not found
+    """
+    try:
+        # Verify user exists
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Parse query parameters
+        unread_only = request.args.get("unread_only", "false").lower() == "true"
+        page = int(request.args.get("page", 1))
+        limit = int(request.args.get("limit", 20))
+        
+        # Build query
+        query = Notification.query.filter_by(user_id=user_id)
+        
+        if unread_only:
+            query = query.filter_by(is_read=False)
+        
+        # Order by most recent first
+        query = query.order_by(Notification.created_at.desc())
+        
+        # Paginate
+        paginated = query.paginate(page=page, per_page=limit, error_out=False)
+        
+        return jsonify({
+            "notifications": [n.to_dict() for n in paginated.items],
+            "page": page,
+            "per_page": limit,
+            "total": paginated.total,
+            "pages": paginated.pages
+        }), 200
+        
+    except (ValueError, TypeError) as exc:
+        current_app.logger.exception("Invalid query parameters", exc_info=exc)
+        return jsonify({"error": "invalid_parameters"}), 400
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch notifications", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/notifications/<int:notification_id>/read")
+def mark_notification_as_read(notification_id: int) -> tuple[dict[str, object], int]:
+    """
+    Mark a single notification as read.
+    
+    Returns:
+      200: Notification updated
+      404: Notification not found
+    """
+    try:
+        notification = Notification.query.filter_by(notification_id=notification_id).first()
+        if not notification:
+            return jsonify({"error": "notification_not_found"}), 404
+        
+        notification.is_read = True
+        db.session.commit()
+        
+        return jsonify({
+            "message": "notification_marked_as_read",
+            "notification": notification.to_dict()
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to mark notification as read", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.put("/users/<int:user_id>/notifications/read-all")
+def mark_all_notifications_as_read(user_id: int) -> tuple[dict[str, object], int]:
+    """
+    Mark all notifications for a user as read.
+    
+    Returns:
+      200: All notifications marked as read
+      404: User not found
+    """
+    try:
+        # Verify user exists
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Update all unread notifications
+        updated_count = Notification.query.filter_by(
+            user_id=user_id,
+            is_read=False
+        ).update({"is_read": True})
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "all_notifications_marked_as_read",
+            "updated_count": updated_count
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed to mark all notifications as read", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+# ============================================================================
