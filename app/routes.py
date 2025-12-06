@@ -14,8 +14,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .extensions import db
 from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
                      LoyaltyRedemption, Message, Notification, Product,
-                     ProductPurchase, Promotion, Review, Salon, SalonImage, Service, Staff,
-                     StaffRating, Transaction, User)
+                     ProductPurchase, Promotion, Review, Salon, SalonImage,
+                     Service, Staff, StaffRating, Transaction, User)
 
 bp = Blueprint("api", __name__)
 
@@ -8342,9 +8342,10 @@ def get_salon_image_data(salon_id: int, image_id: int):
         if not image:
             return jsonify({"error": "image_not_found"}), 404
         
-        from flask import send_file
         from io import BytesIO
-        
+
+        from flask import send_file
+
         # Return binary image data with proper MIME type
         return send_file(
             BytesIO(image.image_data),
