@@ -9592,8 +9592,7 @@ def delete_salon_product(salon_id: int, product_id: int) -> tuple[dict[str, obje
 # --- BEGIN: Barber Role Management (UC 3.0) ---
 
 @bp.get("/barbers/me/staff")
-@_require_token
-def get_barber_staff_record(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+def get_barber_staff_record() -> tuple[dict[str, object], int]:
     """Get the staff record for the authenticated barber user.
     
     This endpoint returns the Staff record linked to the barber's user_id,
@@ -9614,16 +9613,18 @@ def get_barber_staff_record(claims: dict[str, object]) -> tuple[dict[str, object
       401:
         description: Unauthorized (invalid or missing token)
     """
-    user_id = claims.get("user_id")
-    role = claims.get("role")
+    user_id = get_jwt_identity()
     
-    if role != "barber":
-        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    if not user_id:
+        return jsonify({"error": "unauthorized", "message": "Invalid or missing token"}), 401
     
     try:
         user = User.query.get(user_id)
         if not user:
             return jsonify({"error": "not_found", "message": "User not found"}), 404
+        
+        if user.role != "barber":
+            return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
         
         # Find the staff record for this barber
         staff = Staff.query.filter_by(user_id=user_id).first()
@@ -9641,8 +9642,7 @@ def get_barber_staff_record(claims: dict[str, object]) -> tuple[dict[str, object
 
 
 @bp.get("/barbers/me/daily-schedule")
-@_require_token
-def get_barber_daily_schedule(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+def get_barber_daily_schedule() -> tuple[dict[str, object], int]:
     """Get the daily schedule for the authenticated barber.
     
     Returns all appointments for the barber on the specified date.
@@ -9668,13 +9668,19 @@ def get_barber_daily_schedule(claims: dict[str, object]) -> tuple[dict[str, obje
       400:
         description: Invalid date format
     """
-    user_id = claims.get("user_id")
-    role = claims.get("role")
+    user_id = get_jwt_identity()
     
-    if role != "barber":
-        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    if not user_id:
+        return jsonify({"error": "unauthorized", "message": "Invalid or missing token"}), 401
     
     try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "not_found", "message": "User not found"}), 404
+        
+        if user.role != "barber":
+            return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+        
         # Get barber's staff record
         staff = Staff.query.filter_by(user_id=user_id).first()
         if not staff:
@@ -9714,8 +9720,7 @@ def get_barber_daily_schedule(claims: dict[str, object]) -> tuple[dict[str, obje
 
 
 @bp.get("/barbers/me/time-blocks")
-@_require_token
-def get_barber_time_blocks(claims: dict[str, object]) -> tuple[dict[str, object], int]:
+def get_barber_time_blocks() -> tuple[dict[str, object], int]:
     """Get time blocks (unavailable times) for the authenticated barber.
     
     Returns all time blocks (breaks, lunch, unavailable times) for the barber
@@ -9742,13 +9747,19 @@ def get_barber_time_blocks(claims: dict[str, object]) -> tuple[dict[str, object]
       400:
         description: Invalid date format
     """
-    user_id = claims.get("user_id")
-    role = claims.get("role")
+    user_id = get_jwt_identity()
     
-    if role != "barber":
-        return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+    if not user_id:
+        return jsonify({"error": "unauthorized", "message": "Invalid or missing token"}), 401
     
     try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "not_found", "message": "User not found"}), 404
+        
+        if user.role != "barber":
+            return jsonify({"error": "forbidden", "message": "Only barbers can access this endpoint"}), 403
+        
         # Get barber's staff record
         staff = Staff.query.filter_by(user_id=user_id).first()
         if not staff:
