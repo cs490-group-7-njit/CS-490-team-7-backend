@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import boto3
 import stripe
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import URLSafeTimedSerializer
@@ -8149,6 +8150,247 @@ def update_appointment_image_metadata(appointment_id: int, image_id: str) -> tup
     except Exception as exc:
         current_app.logger.exception("Error updating image metadata", exc_info=exc)
         return jsonify({"error": "update_failed"}), 500
+
+
+# ============================================================================
+# Salon Gallery Image Management (UC 1.X - Gallery)
+# ============================================================================
+
+@bp.post("/salons/<int:salon_id>/images")
+def upload_salon_image(salon_id: int) -> tuple[dict[str, object], int]:
+    """Upload an image to salon gallery (vendor only).
+    ---
+    tags:
+      - Salons
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: formData
+        name: file
+        required: true
+        type: file
+      - in: formData
+        name: image_type
+        required: true
+        type: string
+        enum: [before, after, gallery]
+      - in: formData
+        name: description
+        type: string
+    responses:
+      201:
+        description: Image uploaded successfully
+      400:
+        description: Invalid input
+      403:
+        description: Unauthorized
+      404:
+        description: Not found
+      500:
+        description: Server error
+    """
+    try:
+        from .models import SalonImage
+        
+        # Verify salon exists
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor owns salon
+        vendor_id = get_jwt_identity()
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Validate file
+        if 'file' not in request.files:
+            return jsonify({"error": "no_file"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "no_selected_file"}), 400
+        
+        if not file.content_type or not file.content_type.startswith('image/'):
+            return jsonify({"error": "invalid_file_type"}), 400
+        
+        # Get image type
+        image_type = request.form.get('image_type', 'gallery')
+        if image_type not in ['before', 'after', 'gallery']:
+            return jsonify({"error": "invalid_image_type"}), 400
+        
+        description = request.form.get('description', '')
+        
+        # Save to S3
+        import uuid
+        s3_key = f"salon-images/{salon_id}/{uuid.uuid4().hex}_{file.filename}"
+        
+        try:
+            s3_client = boto3.client('s3')
+            s3_client.upload_fileobj(
+                file,
+                current_app.config['AWS_S3_BUCKET'],
+                s3_key,
+                ExtraArgs={'ContentType': file.content_type}
+            )
+        except Exception as e:
+            current_app.logger.error(f"S3 upload failed: {e}")
+            return jsonify({"error": "upload_failed"}), 500
+        
+        # Create database record
+        image_url = f"https://{current_app.config['AWS_S3_BUCKET']}.s3.amazonaws.com/{s3_key}"
+        
+        salon_image = SalonImage(
+            salon_id=salon_id,
+            image_type=image_type,
+            image_url=image_url,
+            s3_key=s3_key,
+            description=description,
+            uploaded_by_id=vendor_id,
+        )
+        
+        db.session.add(salon_image)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Image uploaded successfully",
+            "image": salon_image.to_dict()
+        }), 201
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Error uploading salon image", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.get("/salons/<int:salon_id>/images")
+def get_salon_images(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get all images for a salon, grouped by type.
+    ---
+    tags:
+      - Salons
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: query
+        name: image_type
+        type: string
+        enum: [before, after, gallery]
+    responses:
+      200:
+        description: List of salon images
+      404:
+        description: Not found
+      500:
+        description: Server error
+    """
+    try:
+        from .models import SalonImage
+        
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Get images, optionally filtered by type
+        image_type = request.args.get('image_type')
+        query = SalonImage.query.filter_by(salon_id=salon_id)
+        
+        if image_type:
+            query = query.filter_by(image_type=image_type)
+        
+        images = query.order_by(SalonImage.created_at.desc()).all()
+        
+        # Group by type
+        images_by_type = {
+            'before': [],
+            'after': [],
+            'gallery': []
+        }
+        
+        for img in images:
+            images_by_type[img.image_type].append(img.to_dict())
+        
+        return jsonify({
+            "salon_id": salon_id,
+            "images": [img.to_dict() for img in images],
+            "images_by_type": images_by_type,
+            "total_images": len(images),
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Error fetching salon images", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
+@bp.delete("/salons/<int:salon_id>/images/<int:image_id>")
+def delete_salon_image(salon_id: int, image_id: int) -> tuple[dict[str, object], int]:
+    """Delete a salon image (vendor only).
+    ---
+    tags:
+      - Salons
+    parameters:
+      - in: path
+        name: salon_id
+        required: true
+        schema:
+          type: integer
+      - in: path
+        name: image_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: Image deleted successfully
+      403:
+        description: Unauthorized
+      404:
+        description: Not found
+      500:
+        description: Server error
+    """
+    try:
+        from .models import SalonImage
+        
+        image = SalonImage.query.filter_by(image_id=image_id, salon_id=salon_id).first()
+        if not image:
+            return jsonify({"error": "image_not_found"}), 404
+        
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Verify vendor owns salon
+        vendor_id = get_jwt_identity()
+        if salon.vendor_id != vendor_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        # Delete from S3
+        if image.s3_key:
+            try:
+                s3_client = boto3.client('s3')
+                s3_client.delete_object(
+                    Bucket=current_app.config['AWS_S3_BUCKET'],
+                    Key=image.s3_key
+                )
+            except Exception as e:
+                current_app.logger.warning(f"Failed to delete S3 object: {e}")
+        
+        # Delete from database
+        db.session.delete(image)
+        db.session.commit()
+        
+        return jsonify({"message": "Image deleted successfully"}), 200
+    
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        current_app.logger.exception("Error deleting salon image", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
 
 
 # ============================================================================

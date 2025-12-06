@@ -995,3 +995,46 @@ class AppointmentImage(db.Model):
             "uploaded_by_id": self.uploaded_by_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class SalonImage(db.Model):
+    """Gallery images for salon display and before/after transformations."""
+
+    __tablename__ = "salon_images"
+
+    image_id = db.Column(db.Integer, primary_key=True)
+    salon_id = db.Column(
+        db.Integer, db.ForeignKey("salons.salon_id"), nullable=False
+    )
+    image_type = db.Column(
+        db.Enum("before", "after", "gallery", name="salon_image_type", native_enum=False, validate_strings=True),
+        nullable=False,
+        server_default="gallery",
+    )
+    image_url = db.Column(db.String(500), nullable=False)
+    s3_key = db.Column(db.String(500))  # S3 object key for direct access
+    description = db.Column(db.Text)
+    uploaded_by_id = db.Column(db.Integer, db.ForeignKey("users.user_id"))
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    salon = db.relationship("Salon")
+    uploaded_by = db.relationship("User")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.image_id,
+            "salon_id": self.salon_id,
+            "image_type": self.image_type,
+            "image_url": self.image_url,
+            "s3_key": self.s3_key,
+            "description": self.description,
+            "uploaded_by_id": self.uploaded_by_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
