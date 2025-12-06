@@ -3604,6 +3604,67 @@ def update_user_profile(user_id: int) -> tuple[dict[str, object], int]:
         current_app.logger.exception("Failed to update user profile", exc_info=exc)
         return jsonify({"error": "database_error"}), 500
 
+@bp.get("/users/<int:user_id>/salons")
+def get_user_salons(user_id: int) -> tuple[dict[str, object], int]:
+    """Get all salons owned by a vendor user.
+    ---
+    tags:
+      - Users
+      - Salons
+    parameters:
+      - in: path
+        name: user_id
+        required: true
+        schema:
+          type: integer
+    responses:
+      200:
+        description: List of salons owned by the user
+      403:
+        description: Unauthorized (not a vendor or not the authenticated user)
+      404:
+        description: User not found
+      500:
+        description: Database error
+    """
+    try:
+        # Get current user from JWT
+        current_user_id = get_jwt_identity()
+        
+        # Users can only see their own salons
+        if current_user_id != user_id:
+            return jsonify({"error": "unauthorized"}), 403
+        
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Only vendors can have salons
+        if user.role != "vendor":
+            return jsonify({"salons": []}), 200
+        
+        # Get all salons for this vendor
+        salons = Salon.query.filter_by(vendor_id=user_id).all()
+        
+        return jsonify({
+            "user_id": user_id,
+            "salons": [
+                {
+                    "id": salon.salon_id,
+                    "salon_id": salon.salon_id,
+                    "name": salon.name,
+                    "vendor_id": salon.vendor_id,
+                    "is_published": salon.is_published,
+                    "verification_status": salon.verification_status,
+                }
+                for salon in salons
+            ]
+        }), 200
+    
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch user salons", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
 # ============================================================================
 # UC 2.20 - Save Favorite Salons
 # ============================================================================
