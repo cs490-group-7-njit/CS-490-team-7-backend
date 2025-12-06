@@ -748,6 +748,9 @@ def login() -> tuple[dict[str, object], int]:
     if user.role not in valid_roles:
         return jsonify({"error": "forbidden", "message": f"invalid user role: {user.role}"}), 403
 
+    # Validate password using werkzeug's check_password_hash
+    # NOTE: Only werkzeug-format hashes (pbkdf2, scrypt) are supported.
+    # Ensure all auth_accounts in the database use generate_password_hash() to create hashes.
     if not check_password_hash(auth_account.password_hash, password):
         return jsonify({"error": "unauthorized", "message": "invalid email or password"}), 401
 
