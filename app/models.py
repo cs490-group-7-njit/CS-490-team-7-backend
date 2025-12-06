@@ -556,6 +556,7 @@ class Notification(db.Model):
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "notification_id": self.notification_id,
             "id": self.notification_id,
             "user_id": self.user_id,
             "appointment_id": self.appointment_id,
