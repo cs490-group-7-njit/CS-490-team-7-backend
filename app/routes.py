@@ -9163,6 +9163,73 @@ def delete_promotion(salon_id: int, alert_id: int) -> tuple[dict[str, str], int]
         return jsonify({"error": "database_error"}), 500
 
 
+@bp.get("/salons/<int:salon_id>/promotions/stats")
+def get_promotion_stats(salon_id: int) -> tuple[dict[str, object], int]:
+    """Get statistics for vendor's promotions (UC 1.18).
+        ---
+        tags:
+          - Salons
+        parameters:
+          - in: path
+            name: salon_id
+            required: true
+            schema:
+              type: integer
+        responses:
+          200:
+            description: Success
+          404:
+            description: Not found
+          500:
+            description: Database error
+        """
+    try:
+        salon = Salon.query.get(salon_id)
+        if not salon:
+            return jsonify({"error": "salon_not_found"}), 404
+        
+        # Count total promotions (DiscountAlerts for this salon)
+        total_promotions = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id
+        ).count()
+        
+        # Count active promotions (not expired)
+        from datetime import datetime, timezone
+        active_promotions = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id,
+            DiscountAlert.expires_at > datetime.now(timezone.utc)
+        ).count()
+        
+        # Count inactive promotions (expired)
+        inactive_promotions = total_promotions - active_promotions
+        
+        # For now, these are calculated from available data
+        total_send_campaigns = total_promotions
+        total_recipients_targeted = DiscountAlert.query.filter(
+            DiscountAlert.salon_id == salon_id
+        ).count()
+        
+        average_recipients_per_campaign = (
+            total_recipients_targeted / total_send_campaigns 
+            if total_send_campaigns > 0 
+            else 0
+        )
+        
+        return jsonify({
+            "total_promotions": total_promotions,
+            "active_promotions": active_promotions,
+            "inactive_promotions": inactive_promotions,
+            "total_send_campaigns": total_send_campaigns,
+            "total_recipients_targeted": total_recipients_targeted,
+            "average_recipients_per_campaign": average_recipients_per_campaign,
+            "promotions_by_segment": {}
+        }), 200
+        
+    except SQLAlchemyError as exc:
+        current_app.logger.exception("Failed to fetch promotion stats", exc_info=exc)
+        return jsonify({"error": "database_error"}), 500
+
+
 @bp.get("/salons/<int:salon_id>/promotions/analytics")
 def get_promotion_analytics(salon_id: int) -> tuple[dict[str, object], int]:
     """Get analytics for vendor's promotions (UC 1.18).
