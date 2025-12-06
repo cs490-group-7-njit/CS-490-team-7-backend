@@ -15,7 +15,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .extensions import db
 from .models import (Appointment, AuthAccount, ClientLoyalty, DiscountAlert,
                      LoyaltyRedemption, Message, Notification, Product,
-                     ProductPurchase, Promotion, Review, Salon, Service, Staff,
+                     ProductPurchase, Promotion, Review, Salon, SalonImage, Service, Staff,
                      StaffRating, Transaction, User)
 
 bp = Blueprint("api", __name__)
@@ -8193,8 +8193,6 @@ def upload_salon_image(salon_id: int) -> tuple[dict[str, object], int]:
         description: Server error
     """
     try:
-        from .models import SalonImage
-
         # Verify salon exists
         salon = Salon.query.get(salon_id)
         if not salon:
@@ -8290,8 +8288,6 @@ def get_salon_images(salon_id: int) -> tuple[dict[str, object], int]:
         description: Server error
     """
     try:
-        from .models import SalonImage
-        
         salon = Salon.query.get(salon_id)
         if not salon:
             return jsonify({"error": "salon_not_found"}), 404
@@ -8355,8 +8351,6 @@ def delete_salon_image(salon_id: int, image_id: int) -> tuple[dict[str, object],
         description: Server error
     """
     try:
-        from .models import SalonImage
-        
         image = SalonImage.query.filter_by(image_id=image_id, salon_id=salon_id).first()
         if not image:
             return jsonify({"error": "image_not_found"}), 404
