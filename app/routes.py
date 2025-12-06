@@ -7237,6 +7237,7 @@ def get_salon_payments_by_date(salon_id: int, date: str) -> tuple[dict[str, obje
 # ============================================================================
 
 @bp.get("/salons/<int:salon_id>/customers")
+@jwt_required()
 def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
     """Get all customers and their visit history for a salon (UC 1.16).
         ---
@@ -7345,6 +7346,7 @@ def get_salon_customers(salon_id: int) -> tuple[dict[str, object], int]:
 
 
 @bp.get("/salons/<int:salon_id>/customers/<int:client_id>/history")
+@jwt_required()
 def get_customer_visit_history(salon_id: int, client_id: int) -> tuple[dict[str, object], int]:
     """Get detailed visit history for a specific customer at a salon (UC 1.16).
         ---
