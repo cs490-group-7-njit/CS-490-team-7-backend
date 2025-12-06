@@ -8194,7 +8194,7 @@ def upload_salon_image(salon_id: int) -> tuple[dict[str, object], int]:
     """
     try:
         from .models import SalonImage
-        
+
         # Verify salon exists
         salon = Salon.query.get(salon_id)
         if not salon:
