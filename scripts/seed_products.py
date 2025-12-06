@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app import create_app, db
 from app.models import Product, Salon
 
+
 def seed_products():
     """Add sample products to salons."""
     app = create_app()
