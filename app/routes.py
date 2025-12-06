@@ -766,7 +766,16 @@ def login() -> tuple[dict[str, object], int]:
 
     token = _build_token({"user_id": user.user_id, "role": user.role})
 
-    return jsonify({"token": token, "user": user.to_dict_basic()}), 200
+    user_data = user.to_dict_basic()
+
+    # For barbers, fetch and include their assigned salon
+    if user.role == "barber":
+        staff = Staff.query.filter_by(user_id=user.user_id).first()
+        if staff and staff.salon:
+            user_data["salon_id"] = staff.salon_id
+            user_data["salon_name"] = staff.salon.name
+
+    return jsonify({"token": token, "user": user_data}), 200
 
 
 # --- BEGIN: Vendor Use Case 1.6 - Staff Management ---
