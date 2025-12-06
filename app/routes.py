@@ -8930,13 +8930,38 @@ def create_promotion(salon_id: int) -> tuple[dict[str, object], int]:
             )
             
             db.session.add(promotion)
+            db.session.flush()  # Get the promotion_id without committing yet
+            
+            # Create notifications for existing customers of this salon
+            existing_customers = db.session.query(Appointment.client_id).filter(
+                Appointment.salon_id == salon_id
+            ).distinct().all()
+            
+            notification_count = 0
+            for (client_id,) in existing_customers:
+                # Format discount text
+                if discount_percent:
+                    discount_text = f"{discount_percent}% off"
+                else:
+                    discount_text = f"${discount_amount_cents / 100:.2f} off"
+                
+                notification = Notification(
+                    user_id=client_id,
+                    title="Special Promotion",
+                    message=f"🎉 {salon.name} is offering a special promotion: {description} ({discount_text})!",
+                    notification_type="discount_alert"
+                )
+                db.session.add(notification)
+                notification_count += 1
+            
             db.session.commit()
             
             return jsonify({
                 "message": "Promotion created successfully",
                 "promotion_id": promotion.promotion_id,
                 "description": description,
-                "expires_at": expires_at_dt.isoformat()
+                "expires_at": expires_at_dt.isoformat(),
+                "notifications_sent": notification_count
             }), 201
             
         except SQLAlchemyError as exc:
