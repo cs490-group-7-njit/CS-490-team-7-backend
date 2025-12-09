@@ -1,6 +1,6 @@
 # CS-490 Team 7 Backend
 
-Flask-based REST API for the SalonHub project. 
+Flask-based REST API for the SalonHub project.
 
 ## Getting Started
 1. Create a virtual environment (optional but recommended):
