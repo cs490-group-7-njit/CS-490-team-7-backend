@@ -1,4 +1,4 @@
-# CS-490 Team 7 Backend
+# CS-490 Team 7 Backen d
 
 Flask-based REST API for the SalonHub project.
 
